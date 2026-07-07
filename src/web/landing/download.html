@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LUMOS Download Readiness</title>
+    <link rel="stylesheet" href="/landing-static/landing.css" />
+  </head>
+  <body>
+    <nav class="nav">
+      <a class="brand" href="/"><strong>LUMOS</strong><span>다운로드 준비 상태</span></a>
+      <div class="nav-links">
+        <a href="/">홈</a>
+        <a href="/pricing">가격</a>
+        <a href="/beta">베타</a>
+        <a href="/app">제품 미리보기</a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="section">
+        <p class="eyebrow">Download readiness</p>
+        <h1>Windows portable alpha build를 canary tester 1명 기준으로 먼저 확인하고 있어요.</h1>
+        <p class="lead">
+          LUMOS는 아직 일반 공개 다운로드 단계가 아닙니다. Cohort 1 전체 발송 전에 신뢰 가능한 canary tester 1명에게만 zip 형태의 Windows portable build를 수동 전달하는 흐름을 점검 중입니다.
+        </p>
+        <div class="banner">
+          이 페이지에서는 실제 다운로드 파일을 제공하지 않습니다. installer, code signing, auto-update는 다음 배포 단계에서 검토합니다.
+        </div>
+
+        <div class="grid two">
+          <div class="card">
+            <h3>현재 준비 중인 build</h3>
+            <ul class="list">
+              <li>Windows 10/11 대상 portable zip</li>
+              <li>Python 설치 없이 실행하는 `LUMOS.exe`</li>
+              <li>LUMOS Companion 실행</li>
+              <li>브라우저에서 `/app` 자동 열림</li>
+              <li>First-run onboarding과 오늘의 신호 생성</li>
+              <li>Cloud backend 없이 local mode 사용</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>아직 제공하지 않는 것</h3>
+            <ul class="list">
+              <li>정식 installer</li>
+              <li>code signing</li>
+              <li>auto-update</li>
+              <li>OS startup 또는 tray 실행</li>
+              <li>회원가입, 결제, 요금제 관리</li>
+              <li>일반 공개 다운로드</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="grid two">
+          <div class="card">
+            <h3>베타 사용자 안내</h3>
+            <p>선정된 beta tester에게는 실행 방법, 개인정보 안내, 알려진 한계, 피드백 가이드를 함께 전달합니다.</p>
+            <p>현재 alpha portable build는 code signing 전 단계라 Windows SmartScreen, antivirus, firewall 경고가 보일 수 있습니다.</p>
+          </div>
+          <div class="card">
+            <h3>개발 환경에서 미리 실행</h3>
+            <p>개발 환경에서는 아래 명령으로 현재 MVP를 실행할 수 있습니다. 이 방식은 closed beta 배포 방식과 다릅니다.</p>
+            <pre><code>python run.py companion</code></pre>
+          </div>
+        </div>
+
+        <div class="actions">
+          <a class="button primary" href="/beta">베타 신청하기</a>
+          <a class="button soft" href="/pricing">가격 보기</a>
+          <a class="button" href="/app">제품 미리보기</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">일반 공개 다운로드는 아직 제공하지 않습니다. Closed beta 선정자에게만 수동 배포하는 흐름을 우선 검증합니다.</footer>
+  </body>
+</html>

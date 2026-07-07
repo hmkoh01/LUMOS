@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LUMOS</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">L</div>
+          <div>
+            <h1>LUMOS</h1>
+            <p>오늘 봐야 할 신호만 조용히 골라드려요.</p>
+          </div>
+        </div>
+        <button class="account-chip" type="button" id="account-chip">
+          <span class="account-dot"></span>
+          <span id="account-chip-label">로컬 모드</span>
+        </button>
+        <nav class="nav-tabs" aria-label="주요 메뉴">
+          <button class="nav-item active" data-tab="signals">오늘의 신호</button>
+          <button class="nav-item" data-tab="interests">내 관심사</button>
+          <button class="nav-item" data-tab="sources">소스</button>
+          <button class="nav-item" data-tab="activity">활동</button>
+          <button class="nav-item" data-tab="settings">설정</button>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <section class="view active" id="view-signals" aria-labelledby="signals-title">
+          <div class="hero">
+            <div>
+              <p class="eyebrow">오늘의 브리핑</p>
+              <h2 id="signals-title">오늘 꼭 봐야 할 신호</h2>
+              <p>영어 원문 자료도 한국어로 이해하기 쉽게 정리해드려요.</p>
+              <div class="hero-status" id="signals-status">오늘의 신호를 확인하고 있어요.</div>
+            </div>
+            <div class="hero-actions">
+              <button class="button primary" id="generate-signals">지금 새로 받기</button>
+              <button class="button secondary" id="refresh-signals">새로고침</button>
+            </div>
+          </div>
+          <div id="first-run-panel"></div>
+          <div id="signals-list" class="stack"></div>
+        </section>
+
+        <section class="view" id="view-interests" aria-labelledby="interests-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">개인화 기준</p>
+              <h2 id="interests-title">내 관심사</h2>
+              <p>LUMOS가 신호를 고를 때 참고하는 기준이에요.</p>
+            </div>
+            <button class="button secondary" id="sync-context">개인 맥락 동기화</button>
+          </div>
+          <div id="interests-list" class="grid"></div>
+        </section>
+
+        <section class="view" id="view-sources" aria-labelledby="sources-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">외부 변화 감지</p>
+              <h2 id="sources-title">소스</h2>
+              <p>LUMOS가 외부 변화를 확인하는 곳이에요.</p>
+            </div>
+          </div>
+          <div id="sources-list" class="grid"></div>
+        </section>
+
+        <section class="view" id="view-activity" aria-labelledby="activity-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">조용한 자동화</p>
+              <h2 id="activity-title">활동</h2>
+              <p>LUMOS가 오늘 어떤 일을 했는지 확인할 수 있어요.</p>
+            </div>
+            <button class="button secondary" id="refresh-activity">활동 새로고침</button>
+          </div>
+          <div id="activity-list" class="stack"></div>
+        </section>
+
+        <section class="view" id="view-settings" aria-labelledby="settings-title">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">나에게 맞추기</p>
+              <h2 id="settings-title">설정</h2>
+              <p>매일 어떤 방식으로 신호를 받을지 정해요.</p>
+            </div>
+          </div>
+
+          <form id="settings-form" class="settings-grid">
+            <div class="card account-shell" id="account-shell">
+              <div class="card-title">
+                <h3>계정</h3>
+                <span class="status-chip subtle" id="account-status-chip">로컬 모드</span>
+              </div>
+              <p id="account-summary">지금은 이 기기에서만 LUMOS를 사용하고 있어요.</p>
+              <div class="account-state-grid">
+                <div class="account-state-item">
+                  <strong>계정 연결 상태</strong>
+                  <span id="account-connection">로그인 안 됨 · 로컬 모드</span>
+                </div>
+                <div class="account-state-item">
+                  <strong>기기 상태</strong>
+                  <span id="account-device">이 기기에서 실행 중 · 기기 등록은 아직 연결되지 않았어요.</span>
+                </div>
+                <div class="account-state-item">
+                  <strong>요금제 상태</strong>
+                  <span id="account-plan">현재: 로컬 MVP · 향후 Free / Pro / Team 요금제와 연결 예정</span>
+                </div>
+                <div class="account-state-item">
+                  <strong>Cloud 상태</strong>
+                  <span id="account-cloud-status">연결 안 됨 · 개발용 cloud 테스트는 선택 사항이에요.</span>
+                </div>
+                <div class="account-state-item">
+                  <strong>권한 요약</strong>
+                  <span id="account-entitlements">아직 cloud 권한을 확인하지 않았어요.</span>
+                </div>
+                <div class="account-state-item">
+                  <strong>권한 확인</strong>
+                  <span id="account-entitlement-status">로컬 모드로 사용 중이에요.</span>
+                </div>
+                <div class="account-state-item">
+                  <strong>Grace 만료</strong>
+                  <span id="account-grace-until">아직 없음</span>
+                </div>
+                <div class="account-state-item">
+                  <strong>마지막 확인</strong>
+                  <span id="account-last-checked">아직 없음</span>
+                </div>
+                <div class="account-state-item">
+                  <strong>토큰 저장</strong>
+                  <span id="account-token-storage">메모리 전용</span>
+                </div>
+              </div>
+              <p class="account-note" id="account-note">나중에 로그인하면 구독 상태, 기기 등록, 설정 동기화 기능을 연결할 수 있어요.</p>
+              <p class="account-warning">이 기능은 상용 로그인 기능이 아니라 개발 중인 cloud 연결 확인용입니다. 현재 LUMOS는 계속 로컬 모드로 사용할 수 있어요.</p>
+              <div class="soft-gate-panel">
+                <div>
+                  <strong>요금제별 기능 안내</strong>
+                  <p id="gate-summary-message">현재는 안내만 표시하고 모든 핵심 기능을 계속 사용할 수 있어요.</p>
+                </div>
+                <div id="gate-summary-list" class="gate-summary-list"></div>
+              </div>
+              <div class="actions">
+                <button class="button secondary" type="button" data-account-action="connect">개발용 Cloud 연결 테스트</button>
+                <button class="button ghost" type="button" data-account-action="usage-test">사용량 이벤트 테스트</button>
+                <button class="button ghost" type="button" data-account-action="disconnect">개발용 연결 해제</button>
+                <button class="button ghost" type="button" data-account-action="architecture">계정 구조 보기</button>
+                <button class="button ghost" type="button" data-account-action="roadmap">제품화 로드맵 보기</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">
+                <h3>데일리 브리핑</h3>
+                <span class="status-chip ready">기본값 추천</span>
+              </div>
+              <label class="form-group">
+                <span>받을 신호 개수</span>
+                <select id="setting-signal-count">
+                  <option value="1">1개</option>
+                  <option value="3">3개</option>
+                  <option value="5">5개</option>
+                  <option value="7">7개</option>
+                </select>
+                <small id="signal-count-gate-note" class="soft-warning"></small>
+              </label>
+              <label class="form-group">
+                <span>브리핑 시간</span>
+                <input id="setting-briefing-time" type="time" />
+              </label>
+              <label class="toggle-row">
+                <span>자동 브리핑 켜기</span>
+                <input id="setting-auto-briefing" type="checkbox" />
+              </label>
+            </div>
+
+            <div class="card">
+              <div class="card-title">
+                <h3>개인 맥락</h3>
+                <span class="status-chip subtle">선택 설정</span>
+              </div>
+              <label class="toggle-row">
+                <span>브리핑 전 개인 맥락 동기화</span>
+                <input id="setting-sync-before" type="checkbox" />
+              </label>
+              <label class="form-group">
+                <span>동기화 간격</span>
+                <select id="setting-sync-interval">
+                  <option value="60">1시간마다</option>
+                  <option value="180">3시간마다</option>
+                  <option value="360">6시간마다</option>
+                  <option value="720">12시간마다</option>
+                </select>
+              </label>
+              <label class="toggle-row">
+                <span>브라우저 기록 사용</span>
+                <input id="connector-browser" type="checkbox" />
+              </label>
+              <label class="toggle-row">
+                <span>로컬 폴더 사용</span>
+                <input id="connector-local" type="checkbox" />
+              </label>
+              <label class="form-group">
+                <span>로컬 폴더 경로</span>
+                <textarea id="connector-local-folders" rows="3" placeholder="한 줄에 하나씩 입력하세요."></textarea>
+              </label>
+            </div>
+
+            <div class="card">
+              <div class="card-title">
+                <h3>생성 방식</h3>
+                <span class="status-chip ready">쉬운 모드</span>
+              </div>
+              <div class="mode-list">
+                <label class="mode-option">
+                  <input type="radio" name="generate-mode" value="mock" />
+                  <span><strong>안정 모드</strong><small>샘플 데이터를 기반으로 안정적으로 신호를 만들어요.</small></span>
+                </label>
+                <label class="mode-option">
+                  <input type="radio" name="generate-mode" value="hybrid" />
+                  <span><strong>혼합 모드</strong><small>가능한 실제 소스를 함께 사용해요.</small></span>
+                </label>
+                <label class="mode-option">
+                  <input type="radio" name="generate-mode" value="live" />
+                  <span><strong>실제 소스 모드</strong><small>실제 연결된 소스만 사용해요.</small></span>
+                </label>
+              </div>
+              <button class="button primary full" type="submit">설정 저장</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <div class="onboarding-modal hidden" id="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <div class="onboarding-card">
+        <div class="onboarding-head">
+          <div>
+            <p class="eyebrow">처음 설정</p>
+            <h2 id="onboarding-title">30초만 설정하면 바로 시작할 수 있어요</h2>
+          </div>
+          <button class="button ghost" type="button" id="close-onboarding">닫기</button>
+        </div>
+
+        <div class="stepper" aria-label="온보딩 단계">
+          <span class="step-dot active" data-step-dot="1">1</span>
+          <span class="step-dot" data-step-dot="2">2</span>
+          <span class="step-dot" data-step-dot="3">3</span>
+        </div>
+
+        <form id="onboarding-form">
+          <section class="onboarding-step active" data-step="1">
+            <h3>어떤 일을 하고 있나요?</h3>
+            <p>LUMOS가 신호를 고를 기준을 알려주세요.</p>
+            <div class="choice-grid" id="role-options">
+              <button type="button" class="choice selected" data-role="예비 창업자 / PM">예비 창업자 / PM</button>
+              <button type="button" class="choice" data-role="취업 준비생">취업 준비생</button>
+              <button type="button" class="choice" data-role="콘텐츠 기획자">콘텐츠 기획자</button>
+              <button type="button" class="choice" data-role="연구자 / 대학원생">연구자 / 대학원생</button>
+              <button type="button" class="choice" data-role="개발자">개발자</button>
+            </div>
+            <label class="form-group">
+              <span>직접 입력</span>
+              <input id="onboarding-role-custom" placeholder="예: B2B SaaS 창업 준비 중" />
+            </label>
+          </section>
+
+          <section class="onboarding-step" data-step="2">
+            <h3>요즘 보고 싶은 주제</h3>
+            <p>최소 1개만 있어도 시작할 수 있어요. 3개 이상이면 더 정확해져요.</p>
+            <label class="form-group">
+              <span>관심 키워드 입력</span>
+              <input id="keyword-input" placeholder="AI agent, 생산성 툴, 스타트업" />
+            </label>
+            <div class="suggestion-row">
+              <button type="button" data-suggestion="AI agent">AI agent</button>
+              <button type="button" data-suggestion="생산성 툴">생산성 툴</button>
+              <button type="button" data-suggestion="스타트업">스타트업</button>
+              <button type="button" data-suggestion="모빌리티 UX">모빌리티 UX</button>
+              <button type="button" data-suggestion="GitHub 트렌드">GitHub 트렌드</button>
+              <button type="button" data-suggestion="공식 블로그 업데이트">공식 블로그 업데이트</button>
+            </div>
+            <div class="tag-row" id="keyword-tags"></div>
+          </section>
+
+          <section class="onboarding-step" data-step="3">
+            <h3>어떻게 받을까요?</h3>
+            <p>개인 맥락은 사용자가 켠 경우에만 사용해요. 원문 전체가 아니라 신호를 고르기 위한 일부 요약과 키워드 중심으로 참고합니다.</p>
+            <div class="form-grid">
+              <label class="form-group">
+                <span>받을 신호 개수</span>
+                <select id="onboarding-signal-count">
+                  <option value="1">1개</option>
+                  <option value="3" selected>3개</option>
+                  <option value="5">5개</option>
+                </select>
+              </label>
+              <label class="form-group">
+                <span>브리핑 시간</span>
+                <input id="onboarding-briefing-time" type="time" value="08:00" />
+              </label>
+            </div>
+            <div class="mode-list compact">
+              <label class="mode-option">
+                <input type="radio" name="onboarding-mode" value="mock" />
+                <span><strong>안정 모드</strong><small>샘플 데이터로 안정적으로 시작해요.</small></span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="onboarding-mode" value="hybrid" checked />
+                <span><strong>혼합 모드</strong><small>가능한 실제 소스를 함께 사용해요.</small></span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="onboarding-mode" value="live" />
+                <span><strong>실제 소스 모드</strong><small>연결된 실제 소스만 사용해요.</small></span>
+              </label>
+            </div>
+            <label class="toggle-row">
+              <span>브라우저 기록 사용</span>
+              <input id="onboarding-browser" type="checkbox" />
+            </label>
+            <label class="toggle-row">
+              <span>로컬 폴더 사용</span>
+              <input id="onboarding-local" type="checkbox" />
+            </label>
+            <label class="form-group">
+              <span>로컬 폴더 경로</span>
+              <textarea id="onboarding-local-folders" rows="2" placeholder="한 줄에 하나씩 입력하세요."></textarea>
+            </label>
+          </section>
+
+          <div class="onboarding-actions">
+            <button class="button secondary" type="button" id="onboarding-prev">이전</button>
+            <button class="button primary" type="button" id="onboarding-next">다음</button>
+            <button class="button primary hidden" type="submit" id="onboarding-submit">오늘의 신호 받기</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
