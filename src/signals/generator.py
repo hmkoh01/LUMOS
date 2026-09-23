@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 
 from src.signals.korean_briefing import build_korean_briefing
 from src.storage.sqlite_store import SQLiteStore
+from src.signals.identity import article_key
 
 
 class SignalGenerator:
@@ -24,7 +25,16 @@ class SignalGenerator:
         if replace_today:
             self.store.archive_today_signals(reason=archive_reason)
 
-        selected = ranked_candidates[:signal_count]
+        selected = []
+        seen = set()
+        for candidate in ranked_candidates:
+            identity = article_key(candidate)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            selected.append(candidate)
+            if len(selected) >= signal_count:
+                break
         generated = []
         for rank, candidate in enumerate(selected, start=1):
             signal_id = self.store.create_signal(

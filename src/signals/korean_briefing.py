@@ -1,4 +1,8 @@
 from typing import Any, Dict, List
+import re
+from html import unescape
+
+from src.signals.translation import translate_to_korean
 
 
 def build_korean_briefing(
@@ -14,26 +18,41 @@ def build_korean_briefing(
     keyword_text = ", ".join(keywords[:3]) if keywords else "최근 관심사"
     topic = _topic_from(title, summary, keywords)
     category_text = _category_label(category)
-    source_text = _source_label(source)
-    display_title = _display_title(topic, category_text)
+    clean_title = clean_article_text(title)
+    clean_summary = clean_article_text(summary)
+    language = _guess_language(title, summary)
+
+    if language == "en":
+        # Headlines and summaries read in the user's own language so they can judge
+        # relevance at a glance; if translation is unavailable, fall back to the
+        # original English rather than blocking signal generation.
+        display_title = translate_to_korean(clean_title) or clean_title or clean_summary[:120] or "제목 없는 소식"
+        display_summary = (translate_to_korean(clean_summary) or clean_summary)[:500] or "제공된 요약이 없어요. 원문에서 내용을 확인해주세요."
+    else:
+        display_title = clean_title or clean_summary[:120] or "제목 없는 소식"
+        display_summary = clean_summary[:500] or "제공된 요약이 없어요. 원문에서 내용을 확인해주세요."
 
     return {
+        "briefing_version": 4,
+        "matched_keywords": keywords,
         "display_title_ko": display_title,
-        "display_summary_ko": (
-            f"{topic} 흐름이 {source_text}에서 포착됐어요. "
-            f"{_summary_angle(topic, source)} 오늘 확인할 변화만 짧게 추렸어요."
-        ),
+        "display_summary_ko": display_summary,
         "why_it_matters_ko": (
             f"{category_text} 영역에서 이런 변화가 반복되면 제품 방향, 학습 우선순위, 추적할 경쟁 흐름이 달라질 수 있어요."
         ),
         "recommendation_reason_ko": (
-            f"최근 추천 기준에 {keyword_text}가 포함되어 있어 이 신호를 먼저 보여드려요."
+            f"최근 추천 기준에 {keyword_text}이(가) 포함되어 있어 이 소식을 먼저 보여드려요."
         ),
+        "derived_from_ko": f"'{keywords[0]}' 키워드에서 찾은 소식" if keywords else "",
         "recommended_action_ko": _action_ko(action_hint, topic),
         "original_title": title or "",
         "original_snippet": summary or "",
-        "original_language": _guess_language(title, summary),
+        "original_language": language,
     }
+
+
+def clean_article_text(text: str) -> str:
+    return " ".join(unescape(re.sub(r"<[^>]*>", " ", str(text or ""))).split())
 
 
 def _topic_from(title: str, summary: str, keywords: List[str]) -> str:
@@ -73,14 +92,6 @@ def _keyword_topic(keyword: str) -> str:
     return raw
 
 
-def _display_title(topic: str, category_text: str) -> str:
-    if topic in {"AI 에이전트", "업무 자동화"}:
-        return f"{topic} 흐름이 실제 업무 적용 쪽으로 움직이고 있어요"
-    if topic == "GitHub 트렌드":
-        return "GitHub에서 볼 만한 구현 흐름이 감지됐어요"
-    return f"{topic} 관련 신호를 확인해볼 만해요"
-
-
 def _action_ko(action_hint: str, topic: str) -> str:
     hint = (action_hint or "").lower()
     if "track" in hint or "compare" in hint:
@@ -90,18 +101,6 @@ def _action_ko(action_hint: str, topic: str) -> str:
     if topic in {"AI 에이전트", "업무 자동화", "생산성 툴"}:
         return f"{topic}이 실제 업무나 제품 기능으로 이어지는 사례인지 확인해보세요."
     return f"{topic} 흐름을 계속 추적할지 원문을 보고 판단해보세요."
-
-
-def _summary_angle(topic: str, source: str) -> str:
-    if source == "github":
-        return "구현 사례나 저장소 움직임으로 이어지고 있는지 볼 만해요."
-    if source == "hackernews":
-        return "개발자 커뮤니티의 반응이 붙고 있는지 확인할 만해요."
-    if source in {"rss", "official_ai_blogs"}:
-        return "공식 발표나 제품 업데이트로 확인된 변화예요."
-    if topic in {"AI 에이전트", "업무 자동화"}:
-        return "단순한 아이디어보다 실제 사용 흐름에 가까운 변화예요."
-    return "관심사와 이어질 수 있는 움직임이에요."
 
 
 def _category_label(category: str) -> str:

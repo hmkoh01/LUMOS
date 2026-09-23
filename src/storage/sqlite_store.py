@@ -140,6 +140,7 @@ class SQLiteStore:
             result["enabled_connectors_json"] = self.loads(result["enabled_connectors_json"], DEFAULT_CONNECTORS)
             result["desktop_push_enabled"] = bool(result["desktop_push_enabled"])
             result["sync_before_briefing"] = bool(result.get("sync_before_briefing", 1))
+            result["auto_expand_interests"] = bool(result.get("auto_expand_interests", 0))
             result["mode_enabled"] = bool(result["mode_enabled"])
             result["onboarding_completed"] = bool(result["onboarding_completed"])
             return result
@@ -154,6 +155,7 @@ class SQLiteStore:
             "desktop_push_enabled",
             "generate_mode",
             "sync_before_briefing",
+            "auto_expand_interests",
             "context_sync_interval_minutes",
             "max_interest_keywords",
             "mode_enabled",
@@ -174,7 +176,7 @@ class SQLiteStore:
                 value = value if value in {"mock", "hybrid", "live"} else "mock"
             elif key in {"enabled_sources_json", "enabled_connectors_json"}:
                 value = self.dumps(value)
-            elif key in {"desktop_push_enabled", "sync_before_briefing", "mode_enabled", "onboarding_completed"}:
+            elif key in {"desktop_push_enabled", "sync_before_briefing", "auto_expand_interests", "mode_enabled", "onboarding_completed"}:
                 value = 1 if bool(value) else 0
             assignments.append(f"{key} = ?")
             params.append(value)
@@ -448,6 +450,29 @@ class SQLiteStore:
         matches = [item for item in self.get_interests(limit=500, include_muted=True) if item["keyword"] == keyword]
         return matches[0] if matches else None
 
+    def add_manual_interest(self, keyword: str) -> Dict[str, Any]:
+        keyword = " ".join(keyword.split())
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id FROM interest_graph WHERE keyword = ? COLLATE NOCASE ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, id LIMIT 1",
+                (keyword,),
+            ).fetchone()
+            if row:
+                interest_id = row["id"]
+                conn.execute("UPDATE interest_graph SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (interest_id,))
+            else:
+                cursor = conn.execute(
+                    "INSERT INTO interest_graph (keyword, category, weight, source, evidence_json, status, last_seen_at, updated_at) VALUES (?, 'manual', 1, 'manual', ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                    (keyword, self.dumps({"added_by": "user"})),
+                )
+                interest_id = cursor.lastrowid
+            conn.execute("UPDATE user_settings SET onboarding_completed = 1 WHERE id = 1")
+            result = dict(conn.execute("SELECT * FROM interest_graph WHERE id = ?", (interest_id,)).fetchone())
+            result["evidence_json"] = self.loads(result["evidence_json"], {})
+            conn.commit()
+            return result
+
     def delete_interest(self, keyword: str) -> int:
         return 1 if self.update_interest(keyword, status="deleted") else 0
 
@@ -480,9 +505,12 @@ class SQLiteStore:
         status: Optional[str] = None,
         limit: Optional[int] = 50,
         include_muted: bool = False,
+        include_deleted: bool = True,
     ) -> List[Dict[str, Any]]:
         clauses = []
         params: List[Any] = []
+        if not include_deleted:
+            clauses.append("status != 'deleted'")
         if status:
             clauses.append("status = ?")
             params.append(status)
@@ -1160,12 +1188,37 @@ class SQLiteStore:
         item = dict(row)
         item["source_items_json"] = self.loads(item["source_items_json"], [])
         item["metadata_json"] = self.loads(item.get("metadata_json"), {})
+        if item["metadata_json"].get("briefing_version", 0) < 4:
+            from src.signals.korean_briefing import build_korean_briefing
+            matched = []
+            with self.connect() as conn:
+                candidates = conn.execute(
+                    "SELECT matched_keywords_json FROM signal_candidates WHERE pipeline_run_id = ? AND source_item_id IN (SELECT id FROM source_items WHERE url = ?)",
+                    (item.get("pipeline_run_id"), item.get("source_url")),
+                ).fetchall()
+            for candidate in candidates:
+                matched.extend(self.loads(candidate["matched_keywords_json"], []))
+            item["metadata_json"].update(build_korean_briefing(
+                title=item.get("title", ""), summary=item.get("summary", ""),
+                source=item.get("source_name", ""), category=item.get("category", ""),
+                matched_keywords=list(dict.fromkeys(matched)),
+            ))
+            # Persist the rebuild so translation (network-bound) only runs once per row,
+            # not on every subsequent read of this signal.
+            with self.connect() as conn:
+                conn.execute(
+                    "UPDATE signals SET metadata_json = ? WHERE id = ?",
+                    (self.dumps(item["metadata_json"]), item["id"]),
+                )
+                conn.commit()
+        item["matched_keywords"] = item["metadata_json"].get("matched_keywords", [])
         for key in {
             "display_title_ko",
             "display_summary_ko",
             "why_it_matters_ko",
             "recommendation_reason_ko",
             "recommended_action_ko",
+            "derived_from_ko",
             "original_title",
             "original_snippet",
             "original_language",

@@ -12,6 +12,7 @@ class SettingsUpdate(BaseModel):
     desktop_push_enabled: Optional[bool] = None
     generate_mode: Optional[str] = None
     sync_before_briefing: Optional[bool] = None
+    auto_expand_interests: Optional[bool] = None
     context_sync_interval_minutes: Optional[int] = Field(default=None, ge=1)
     max_interest_keywords: Optional[int] = Field(default=None, ge=1)
     mode_enabled: Optional[bool] = None

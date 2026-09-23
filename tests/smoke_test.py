@@ -52,6 +52,8 @@ def build_client():
     tmpdir = tempfile.TemporaryDirectory()
     db_path = Path(tmpdir.name) / "lumos.db"
     store = SQLiteStore(db_path)
+    # This suite exercises the optional automatic interest learning flow.
+    store.update_settings({"auto_expand_interests": True})
     app.dependency_overrides[get_store] = lambda: store
     return TestClient(app), tmpdir, store
 
@@ -321,7 +323,7 @@ def main():
             assert bridge_body["token_storage"] in {"memory", "keyring_unavailable_memory", "keyring"}, bridge_body
             assert bridge_body["entitlement_cache"]["status"] == "valid", bridge_body
             assert bridge_body["entitlement_cache"]["decision"] == "use_cache", bridge_body
-            assert bridge_body["entitlement_summary"]["daily_signals"].startswith("오늘 신호"), bridge_body
+            assert bridge_body["entitlement_summary"]["daily_signals"].startswith("오늘 소식"), bridge_body
             assert bridge_body["user"]["email"] == "demo@lumos.local", bridge_body
             assert bridge_body["device"]["status"] == "active", bridge_body
             assert bridge_body["entitlements"]["max_signals_per_day"] > 3, bridge_body
@@ -482,9 +484,9 @@ def main():
         assert "python run.py demo-companion" in readme
         response = client.get("/app")
         assert response.status_code == 200, response.text
-        assert "오늘 꼭 봐야 할 신호" in response.text
+        assert "오늘의 소식들" in response.text
         assert "30초만 설정하면 바로 시작할 수 있어요" in response.text
-        assert "오늘의 신호 받기" in response.text
+        assert "오늘의 소식 받기" in response.text
         assert "계정" in response.text
         assert "로컬 모드" in response.text
         assert "개발용 Cloud 연결 테스트" in response.text
@@ -496,7 +498,7 @@ def main():
         assert "signal-count-gate-note" in response.text
         response = client.get("/")
         assert response.status_code == 200, response.text
-        assert "오늘 봐야 할 3개의 신호" in response.text
+        assert "오늘 봐야 할 3개의 소식" in response.text
         assert "실제 결제" in response.text
         assert 'href="/beta"' in response.text
         assert 'href="/pricing"' in response.text
@@ -572,7 +574,7 @@ def main():
         assert "원문 제목" in app_js
         assert "원문 snippet" in app_js
         assert "브리핑 참고 정보" in app_js
-        assert "아직 오늘의 신호가 없어요." in app_js
+        assert "아직 오늘의 소식이 없어요." in app_js
         assert "아직 추천 기준이 충분하지 않아요." in app_js
         assert "안정 모드" in app_js
         assert "혼합 모드" in app_js
@@ -611,8 +613,8 @@ def main():
         assert "Cloud 연결은 설정 화면에서 확인할 수 있어요." in companion_source
         assert "계정: 로컬 모드" in companion_source
         assert "작은 도우미" in companion_source
-        assert "오늘의 신호 열기" in companion_source
-        assert "새 신호 준비하기" in companion_source
+        assert "오늘의 소식 열기" in companion_source
+        assert "새 소식 준비하기" in companion_source
         assert "개인 맥락 동기화" in companion_source
         assert "설정 화면 열기" in companion_source
         assert "활동 기록 보기" in companion_source
@@ -876,6 +878,8 @@ def main():
 
         COLLECTOR_OVERRIDES.clear()
         COLLECTOR_OVERRIDES.update({"hackernews": FakeCollector("hackernews"), "rss": FakeCollector("rss"), "github": FakeCollector("github")})
+        # Hybrid fixtures must match an active interest; unrelated items are rejected.
+        store.upsert_interest("hybrid pipeline testing", "test", 1, "manual", {})
         response = client.put("/api/v1/sources/configs/hackernews", json={"enabled": True, "priority": 90})
         assert response.status_code == 200, response.text
         response = client.put("/api/v1/sources/configs/github", json={"enabled": True, "priority": 95})

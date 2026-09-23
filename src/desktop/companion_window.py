@@ -39,7 +39,7 @@ class CompanionWindow:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         self.run_status = tk.StringVar(value="LUMOS 실행 상태: 확인 중")
-        self.signal_status = tk.StringVar(value="오늘의 신호: 확인 중")
+        self.signal_status = tk.StringVar(value="오늘의 소식: 확인 중")
         self.account_status = tk.StringVar(value="계정: 로컬 모드")
         self.last_updated = tk.StringVar(value="마지막 확인: 아직 없음")
         self.message = tk.StringVar(value="LUMOS를 실행하고 브라우저 화면으로 연결할 준비가 되었어요.")
@@ -59,13 +59,13 @@ class CompanionWindow:
         title.pack(anchor="w")
         subtitle = ttk.Label(
             frame,
-            text="LUMOS를 실행하고 오늘의 신호 화면으로 연결해주는 작은 도우미예요.",
+            text="LUMOS를 실행하고 오늘의 소식 화면으로 연결해주는 작은 도우미예요.",
             wraplength=400,
         )
         subtitle.pack(anchor="w", pady=(4, 6))
         helper = ttk.Label(
             frame,
-            text="오늘의 신호는 브라우저 화면에서 확인하고, 이 창에서는 빠른 실행만 도와드려요.",
+            text="오늘의 소식는 브라우저 화면에서 확인하고, 이 창에서는 빠른 실행만 도와드려요.",
             wraplength=400,
         )
         helper.pack(anchor="w", pady=(0, 20))
@@ -80,8 +80,8 @@ class CompanionWindow:
 
         action_frame = ttk.Frame(frame)
         action_frame.pack(fill=tk.X, pady=(0, 14))
-        ttk.Button(action_frame, text="오늘의 신호 열기", command=lambda: self.open_web_tab("today")).pack(fill=tk.X, pady=5)
-        self.generate_button = ttk.Button(action_frame, text="새 신호 준비하기", command=self.generate_signals)
+        ttk.Button(action_frame, text="오늘의 소식 열기", command=lambda: self.open_web_tab("today")).pack(fill=tk.X, pady=5)
+        self.generate_button = ttk.Button(action_frame, text="새 소식 준비하기", command=self.generate_signals)
         self.generate_button.pack(fill=tk.X, pady=5)
         self.sync_button = ttk.Button(action_frame, text="개인 맥락 동기화", command=self.sync_context)
         self.sync_button.pack(fill=tk.X, pady=5)
@@ -116,15 +116,15 @@ class CompanionWindow:
             active = [signal for signal in signals if signal.get("status") != "archived"]
             self._ui(lambda: self.run_status.set("LUMOS 실행 상태: 실행 중"))
             if active:
-                self._ui(lambda: self.signal_status.set(f"오늘의 신호: {len(active)}개 준비됨"))
-                self._ui(lambda: self.message.set("오늘의 신호가 준비돼 있어요. 브라우저에서 확인해보세요."))
+                self._ui(lambda: self.signal_status.set(f"오늘의 소식: {len(active)}개 준비됨"))
+                self._ui(lambda: self.message.set("오늘의 소식이 준비돼 있어요. 브라우저에서 확인해보세요."))
             else:
-                self._ui(lambda: self.signal_status.set("오늘의 신호: 아직 없음"))
-                self._ui(lambda: self.message.set("아직 오늘의 신호가 없어요. 새 신호를 준비할 수 있어요."))
+                self._ui(lambda: self.signal_status.set("오늘의 소식: 아직 없음"))
+                self._ui(lambda: self.message.set("아직 오늘의 소식이 없어요. 새 소식을 준비할 수 있어요."))
             self._update_time()
         except Exception:
             self._ui(lambda: self.run_status.set("LUMOS 실행 상태: 연결 불안정"))
-            self._ui(lambda: self.signal_status.set("오늘의 신호: 확인 중"))
+            self._ui(lambda: self.signal_status.set("오늘의 소식: 확인 중"))
             self._ui(lambda: self.message.set("잠시 연결이 불안정해요. 다시 시도해보세요."))
 
     def open_web_tab(self, tab_name: str = "today", message: Optional[str] = None):
@@ -137,7 +137,7 @@ class CompanionWindow:
         elif WEB_TAB_HASHES.get(tab_name, "today") == "activity":
             self.message.set("활동 기록을 열었어요.")
         else:
-            self.message.set("오늘의 신호 화면을 열었어요.")
+            self.message.set("오늘의 소식 화면을 열었어요.")
 
     def open_web(self, tab: str = "today"):
         self.open_web_tab(tab)
@@ -156,8 +156,8 @@ class CompanionWindow:
         self.message.set("도움말 문서를 찾지 못했어요. 실행 폴더의 README_FIRST.md를 확인해 주세요.")
 
     def generate_signals(self):
-        self._set_button_state(self.generate_button, False, "새 신호를 준비하는 중")
-        self.message.set("새 신호를 준비하고 있어요.")
+        self._set_button_state(self.generate_button, False, "새 소식을 준비하는 중")
+        self.message.set("새 소식을 준비하고 있어요.")
         self._run_background(self._generate_worker)
 
     def _generate_worker(self):
@@ -166,13 +166,13 @@ class CompanionWindow:
             mode = settings.get("generate_mode", "hybrid")
             result = self._post("/api/v1/signals/generate", {"mode": mode, "replace_today": True})
             count = result.get("generated_signal_count", 0)
-            self._ui(lambda: self.signal_status.set(f"오늘의 신호: {count}개 준비됨"))
-            self._ui(lambda: self.open_web_tab("today", "오늘의 신호가 준비됐어요. 브라우저에서 확인할 수 있어요."))
+            self._ui(lambda: self.signal_status.set(f"오늘의 소식: {count}개 준비됨"))
+            self._ui(lambda: self.open_web_tab("today", "오늘의 소식이 준비됐어요. 브라우저에서 확인할 수 있어요."))
             self._notify_ready(count)
         except Exception:
             self._ui(lambda: self.message.set("잠시 연결이 불안정해요. 다시 시도해보세요."))
         finally:
-            self._ui(lambda: self._set_button_state(self.generate_button, True, "새 신호 준비하기"))
+            self._ui(lambda: self._set_button_state(self.generate_button, True, "새 소식 준비하기"))
             self._update_time()
 
     def sync_context(self):
@@ -209,7 +209,7 @@ class CompanionWindow:
         try:
             from src.delivery.desktop_notification import DesktopNotification
 
-            DesktopNotification().send("LUMOS", f"오늘 볼 신호 {count}개를 골랐어요.")
+            DesktopNotification().send("LUMOS", f"오늘 볼 소식 {count}개를 골랐어요.")
         except Exception:
             pass
 

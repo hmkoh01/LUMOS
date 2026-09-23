@@ -29,6 +29,8 @@ def keywords_from_signal(signal: Dict[str, Any], max_keywords: int = 8) -> List[
 
 
 def apply_feedback_learning(store: SQLiteStore, signal_id: int, event_type: str, payload: Dict[str, Any] = None) -> List[str]:
+    if not store.get_settings().get("auto_expand_interests", False):
+        return []
     if event_type not in FEEDBACK_DELTAS or signal_id <= 0:
         return []
     signal = store.get_signal(signal_id)

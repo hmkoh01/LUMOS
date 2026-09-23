@@ -92,6 +92,8 @@ def sync_connector(store: SQLiteStore, connector_type: str, config: Dict[str, An
 
 
 def apply_keywords_to_interest_graph(store: SQLiteStore, connector_type: str, keywords: List[Dict[str, Any]], items) -> List[str]:
+    if not store.get_settings().get("auto_expand_interests", False):
+        return []
     updated = []
     evidence_items = []
     for item in list(items)[:5]:

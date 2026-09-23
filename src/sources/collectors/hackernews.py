@@ -1,10 +1,14 @@
 import json
 import urllib.request
+from urllib.parse import urlencode
+import re
+from html import unescape
 from datetime import datetime
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 from src.sources.collectors.base import BaseCollector, CollectedItem, CollectorResult, SourceQuery
+from src.context.interest_matching import matches_interest
 
 
 class HackerNewsCollector(BaseCollector):
@@ -16,6 +20,8 @@ class HackerNewsCollector(BaseCollector):
         self.timeout = timeout
 
     def collect(self, queries: List[SourceQuery], limit: int) -> CollectorResult:
+        if any((query.params or {}).get("search") for query in queries):
+            return self._collect_search(queries, limit)
         warnings = []
         try:
             story_kind = self._story_kind(queries)
@@ -27,7 +33,6 @@ class HackerNewsCollector(BaseCollector):
         route_id = queries[0].route_id if queries else None
         max_scan = self._max_story_scan(queries, limit)
         items: List[CollectedItem] = []
-        fallback: List[CollectedItem] = []
         for story_id in story_ids[:max_scan]:
             try:
                 story = self.fetch_json(f"{self.BASE_URL}/item/{story_id}.json", self.timeout)
@@ -38,16 +43,47 @@ class HackerNewsCollector(BaseCollector):
             if not item:
                 continue
             haystack = f"{item.title} {item.url} {item.summary}".lower()
-            if query_terms and any(term in haystack for term in query_terms):
+            if query_terms and any(matches_interest(haystack, term) for term in query_terms):
                 items.append(item)
-            else:
-                fallback.append(item)
             if len(items) >= limit:
                 break
 
-        if len(items) < limit:
-            items.extend(fallback[: limit - len(items)])
         return CollectorResult(source=self.source_id, items=items[:limit], warnings=warnings)
+
+    def _collect_search(self, queries: List[SourceQuery], limit: int) -> CollectorResult:
+        items, errors, seen = [], [], set()
+        for query in queries:
+            if not query.query.strip():
+                continue
+            params = urlencode({"query": query.query, "tags": "story", "hitsPerPage": 50,
+                                "restrictSearchableAttributes": "title",
+                                "numericFilters": f"created_at_i>{int(time.time()) - 180 * 86400}"})
+            try:
+                payload = self.fetch_json(f"https://hn.algolia.com/api/v1/search_by_date?{params}", self.timeout)
+                for hit in payload.get("hits", []):
+                    text = unescape(re.sub(r"<[^>]*>", " ", hit.get("story_text") or ""))
+                    title = unescape(hit.get("title") or "")
+                    if not matches_interest(f"{title} {text}", query.query):
+                        continue
+                    story = {"id": hit.get("objectID"), "title": title, "text": text,
+                             "url": hit.get("url"), "time": hit.get("created_at_i"),
+                             "score": hit.get("points") or 0, "descendants": hit.get("num_comments") or 0,
+                             "by": hit.get("author")}
+                    item = self._normalize_story(story, query.route_id)
+                    if not item or item.source_item_id in seen:
+                        continue
+                    # Retain matching text for the downstream relevance check, even beyond the preview.
+                    item.raw_json["search_text"] = text
+                    item.raw_json["search_query"] = query.query
+                    items.append(item)
+                    seen.add(item.source_item_id)
+                    if len(items) >= limit:
+                        break
+            except Exception as exc:
+                errors.append(f"search {query.query}: {exc}")
+            if len(items) >= limit:
+                break
+        return CollectorResult(source=self.source_id, items=items, errors=errors)
 
     def _story_kind(self, queries: List[SourceQuery]) -> str:
         for query in queries:
@@ -84,7 +120,7 @@ class HackerNewsCollector(BaseCollector):
             summary=(story.get("text") or "")[:500],
             author=story.get("by") or "",
             published_at=published_at,
-            metrics_json={"score": score, "comments": comments, "descendants": comments},
+            metrics_json={"score": score, "points": score, "comments": comments, "descendants": comments},
             raw_json={
                 "hn_id": story_id,
                 "type": story.get("type"),

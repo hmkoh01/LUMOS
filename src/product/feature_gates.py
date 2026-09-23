@@ -93,12 +93,12 @@ class StaticFeatureGateService:
                     required_plan="pro",
                     current_value=current_value,
                     limit_value=limit,
-                    message_ko=f"{cache_prefix}현재는 제한하지 않지만, {plan_label(plan)} 기준보다 많은 신호를 요청했어요.",
-                    upgrade_hint_ko="Pro에서는 더 많은 오늘의 신호를 제공하도록 설계 중이에요.",
+                    message_ko=f"{cache_prefix}현재는 제한하지 않지만, {plan_label(plan)} 기준보다 많은 소식을 요청했어요.",
+                    upgrade_hint_ko="Pro에서는 더 많은 오늘의 소식을 제공하도록 설계 중이에요.",
                     is_dev=context.is_dev,
                     is_enforced=False,
                 )
-            return self._allowed(key, plan, f"{cache_prefix}{plan_label(plan)} 기준 오늘의 신호는 {limit}개까지가 기본이에요.", limit)
+            return self._allowed(key, plan, f"{cache_prefix}{plan_label(plan)} 기준 오늘의 소식는 {limit}개까지가 기본이에요.", limit)
 
         if key == FeatureKey.SOURCE_COUNT:
             limit = int(entitlements.get("max_sources", 3))

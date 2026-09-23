@@ -111,6 +111,9 @@ function bindTopActions() {
   document.getElementById("sync-context").addEventListener("click", syncContext);
   document.getElementById("refresh-activity").addEventListener("click", loadActivity);
   document.getElementById("settings-form").addEventListener("submit", saveSettings);
+  document.getElementById("add-interest").addEventListener("click", openInterestForm);
+  document.getElementById("cancel-add-interest").addEventListener("click", closeInterestForm);
+  document.getElementById("add-interest-form").addEventListener("submit", addManualInterest);
   document.getElementById("account-chip")?.addEventListener("click", () => setActiveTab("settings", { updateHash: true, load: true }));
   document.querySelectorAll("[data-account-action]").forEach((button) => {
     button.addEventListener("click", () => handleAccountAction(button.dataset.accountAction));
@@ -143,7 +146,7 @@ function bindOnboarding() {
 }
 
 async function loadInitialData() {
-  showLoading("signals-list", "오늘의 신호를 확인하고 있어요.");
+  showLoading("signals-list", "오늘의 소식을 확인하고 있어요.");
   await Promise.allSettled([loadProfile(), loadSettings(), loadConnectors(), loadSources(), loadInterests(false), loadSignals(false)]);
   detectFirstRun();
   renderFirstRunPanel();
@@ -221,7 +224,7 @@ async function loadFeatureGates() {
 
 async function loadSignals(render = true) {
   const container = document.getElementById("signals-list");
-  if (render) showLoading("signals-list", "오늘의 신호를 불러오고 있어요.");
+  if (render) showLoading("signals-list", "오늘의 소식을 불러오고 있어요.");
   try {
     const data = await api("/api/v1/signals/today");
     state.signals = (data.signals || []).filter((signal) => signal.status !== "archived");
@@ -237,11 +240,11 @@ async function loadSignals(render = true) {
 function renderSignals() {
   const container = document.getElementById("signals-list");
   document.getElementById("signals-status").textContent = state.signals.length
-    ? `오늘의 신호 ${state.signals.length}개가 준비됐어요.`
-    : "아직 오늘의 신호가 없어요. 지금 받아볼까요?";
+    ? `오늘의 소식 ${state.signals.length}개가 준비됐어요.`
+    : "아직 오늘의 소식이 없어요. 지금 받아볼까요?";
   if (!state.signals.length) {
     container.innerHTML = emptyState(
-      "아직 오늘의 신호가 없어요.",
+      "아직 오늘의 소식이 없어요.",
       "지금 새로 받아보면 관심사에 맞는 변화를 한국어로 정리해드릴게요.",
       "지금 새로 받기",
       "generate"
@@ -255,8 +258,7 @@ function renderSignals() {
 
 function detectFirstRun() {
   const onboardingDone = Boolean(state.settings?.onboarding_completed);
-  const activeInterests = state.interests.filter((item) => item.status === "active");
-  state.firstRun = !state.profile || !onboardingDone || activeInterests.length < 1 || state.signals.length < 1;
+  state.firstRun = Boolean(state.settings) && !onboardingDone;
 }
 
 function renderFirstRunPanel() {
@@ -270,7 +272,7 @@ function renderFirstRunPanel() {
       <div>
         <p class="eyebrow">첫 브리핑 준비</p>
         <h3>아직 LUMOS가 당신의 관심사를 몰라요.</h3>
-        <p>30초만 설정하면 오늘 볼 신호를 한국어로 정리해드릴게요.</p>
+        <p>30초만 설정하면 오늘 볼 소식을 한국어로 정리해드릴게요.</p>
       </div>
       <button class="button primary" data-open-onboarding>시작하기</button>
     </div>
@@ -281,17 +283,21 @@ function renderFirstRunPanel() {
 async function generateSignals(triggerButton) {
   const button = triggerButton || document.getElementById("generate-signals");
   const original = button.textContent;
-  setBusy(button, true, "신호를 고르는 중");
+  setBusy(button, true, "소식을 고르는 중");
   try {
     const mode = state.settings?.generate_mode || "hybrid";
     const data = await api("/api/v1/signals/generate", {
       method: "POST",
       body: JSON.stringify({ mode, replace_today: true }),
     });
-    if ((data.failed_sources || []).length || Object.keys(data.errors_by_source || {}).length) {
-      showToast("일부 소스에서 데이터를 가져오지 못했지만, 가능한 소스로 신호를 만들었어요.");
+    if (!data.generated_signal_count) {
+      showToast((data.failed_sources || []).length || Object.keys(data.errors_by_source || {}).length
+        ? "소스 연결에 실패해 새 소식을 만들지 못했어요. 활동 탭에서 오류를 확인해주세요."
+        : "이번 수집에서는 관심사에 맞는 새 소식을 찾지 못했어요. 관심사와 소스 설정을 확인해주세요.");
+    } else if ((data.failed_sources || []).length || Object.keys(data.errors_by_source || {}).length) {
+      showToast("일부 소스에서 데이터를 가져오지 못했지만, 가능한 소스로 소식을 만들었어요.");
     } else {
-      showToast("오늘의 신호를 한국어로 정리했어요.");
+      showToast(`관심사에 맞는 소식 ${data.generated_signal_count}개를 정리했어요.`);
     }
     await Promise.allSettled([loadSettings(), loadInterests(false), loadSignals(false)]);
     detectFirstRun();
@@ -308,19 +314,23 @@ function renderSignalCard(signal) {
   const sourceItems = signal.source_items_json || [];
   const confidence = Math.round(Number(signal.confidence || 0) * 100);
   const sourceUrl = signal.source_url || sourceItems.find((item) => item.url)?.url || "";
-  const titleKo = signal.display_title_ko || signal.title || "오늘 확인할 신호";
-  const summaryKo = signal.display_summary_ko || signal.summary || "원문에서 가져온 표현을 바탕으로 정리한 신호예요.";
+  const titleKo = signal.display_title_ko || signal.title || "오늘 확인할 소식";
+  const summaryKo = signal.display_summary_ko || signal.summary || "원문에서 가져온 표현을 바탕으로 정리한 소식예요.";
   const whyKo = signal.why_it_matters_ko || signal.why_it_matters || "지금 흐름을 이해하는 데 도움이 되는 변화예요.";
   const reasonKo = signal.recommendation_reason_ko || recommendationReason(signal);
   const actionKo = signal.recommended_action_ko || signal.recommended_action || "원문을 빠르게 훑고 계속 추적할 흐름인지 표시해보세요.";
   const originalTitle = signal.original_title || signal.title || sourceItems[0]?.title || "";
   const originalSnippet = signal.original_snippet || signal.summary || sourceItems[0]?.summary || "";
+  const matchedKeywords = signal.matched_keywords || signal.metadata_json?.matched_keywords || [];
+  const derivedFromKo = signal.derived_from_ko
+    || (matchedKeywords.length ? `'${matchedKeywords[0]}' 키워드에서 찾은 소식` : "");
   return `
     <article class="signal-card" data-signal-id="${signal.id}">
       <div class="signal-head">
         <div class="rank">${signal.rank || 1}</div>
         <div>
           <h3 class="signal-title">${escapeHtml(titleKo)}</h3>
+          ${derivedFromKo ? `<p class="signal-derived-from">${escapeHtml(derivedFromKo)}</p>` : ""}
           <p class="signal-summary">${escapeHtml(summaryKo)}</p>
         </div>
       </div>
@@ -332,7 +342,6 @@ function renderSignalCard(signal) {
       </div>
       <div class="signal-body">
         <div class="info-box"><strong>왜 중요한가</strong><p>${escapeHtml(whyKo)}</p></div>
-        <div class="info-box"><strong>왜 나에게 추천됐나요?</strong><p>${escapeHtml(reasonKo)}</p></div>
         <div class="info-box"><strong>다음에 볼 것</strong><p>${escapeHtml(actionKo)}</p></div>
       </div>
       <div class="actions">
@@ -346,7 +355,7 @@ function renderSignalCard(signal) {
         <div class="details-content">
           <div class="detail-block"><strong>원문 제목</strong><p>${escapeHtml(originalTitle || "원문 제목을 찾지 못했어요.")}</p></div>
           <div class="detail-block"><strong>원문 snippet</strong><p>${escapeHtml(originalSnippet || "원문에서 가져온 짧은 설명이 아직 없어요.")}</p></div>
-          <p>일부 정보는 원문에서 가져온 표현이에요. 핵심 내용은 한국어 브리핑으로 다시 정리했어요.</p>
+          <p>제목과 요약은 제공된 원문 내용을 기준으로 표시해요.</p>
           <p>${signal.pipeline_run_id ? "이번 브리핑을 만든 내부 기록이 있어요." : "브리핑 기록은 아직 연결되지 않았어요."}</p>
           <p>현재 생성 방식은 ${modeLabels[state.settings?.generate_mode || "hybrid"] || "혼합 모드"}예요.</p>
           ${sourceItems.length ? `<div class="related-list">${sourceItems.map(renderRelatedItem).join("")}</div>` : ""}
@@ -371,7 +380,7 @@ function bindSignalActions(container) {
     button.addEventListener("click", async () => {
       const card = button.closest(".signal-card");
       const eventType = button.dataset.feedback;
-      const messages = { saved: "저장했어요", ignored: "비슷한 신호를 줄일게요", tracked: "이 흐름을 계속 지켜볼게요" };
+      const messages = { saved: "저장했어요", ignored: "비슷한 소식을 줄일게요", tracked: "이 흐름을 계속 지켜볼게요" };
       setBusy(button, true, "처리 중");
       try {
         await api(`/api/v1/signals/${card.dataset.signalId}/feedback`, {
@@ -413,7 +422,7 @@ async function loadInterests(render = true) {
   if (render) showLoading("interests-list", "관심사를 불러오고 있어요.");
   try {
     const data = await api("/api/v1/interests?include_muted=true&limit=100");
-    state.interests = data.interests || [];
+    state.interests = (data.interests || []).filter((interest) => interest.status !== "deleted");
     if (render) renderInterests();
   } catch (error) {
     if (render) {
@@ -428,15 +437,57 @@ function renderInterests() {
   if (!state.interests.length) {
     container.innerHTML = emptyState(
       "아직 추천 기준이 충분하지 않아요.",
-      "관심 키워드를 추가하면 더 정확한 신호를 받을 수 있어요.",
+      "관심 키워드를 추가하면 더 정확한 소식을 받을 수 있어요.",
       "관심사 추가하기",
-      "open-onboarding"
+      "add-interest-keyword"
     );
-    bindEmptyAction("open-onboarding", openOnboarding);
+    bindEmptyAction("add-interest-keyword", openInterestForm);
     return;
   }
   container.innerHTML = state.interests.map(renderInterestCard).join("");
   bindInterestActions(container);
+}
+
+function openInterestForm() {
+  document.getElementById("add-interest-form").classList.remove("hidden");
+  document.getElementById("add-interest").setAttribute("aria-expanded", "true");
+  document.getElementById("new-interest-keyword").focus();
+}
+
+function closeInterestForm() {
+  document.getElementById("add-interest-form").classList.add("hidden");
+  document.getElementById("add-interest").setAttribute("aria-expanded", "false");
+  document.getElementById("add-interest-error").textContent = "";
+  document.getElementById("add-interest").focus();
+}
+
+async function addManualInterest(event) {
+  event.preventDefault();
+  const input = document.getElementById("new-interest-keyword");
+  const error = document.getElementById("add-interest-error");
+  const keyword = input.value.trim();
+  error.textContent = "";
+  if (!keyword) {
+    error.textContent = "키워드를 입력해주세요.";
+    input.focus();
+    return;
+  }
+  const button = event.currentTarget.querySelector("button[type='submit']");
+  setBusy(button, true, "추가 중");
+  try {
+    await api("/api/v1/interests", { method: "POST", body: JSON.stringify({ keyword }) });
+    input.value = "";
+    closeInterestForm();
+    await Promise.all([loadInterests(), loadSettings()]);
+    detectFirstRun();
+    renderFirstRunPanel();
+    showToast("관심 키워드를 추가했어요");
+  } catch (failure) {
+    error.textContent = failure.message;
+    openInterestForm();
+  } finally {
+    setBusy(button, false, "추가");
+  }
 }
 
 function renderInterestCard(interest) {
@@ -514,7 +565,7 @@ async function loadSources() {
     const sources = sourceOrder.map((id) => state.sources.find((source) => source.source_id === id)).filter(Boolean);
     const enabledCount = sources.filter((source) => source.current_enabled).length;
     const emptyBanner = !enabledCount
-      ? `<div class="empty-state"><h3>켜진 소스가 없어요.</h3><p>Hacker News, GitHub, RSS 중 하나를 켜면 신호를 만들 수 있어요.</p><button class="button primary" data-action="seed-sources">기본 소스 켜기</button></div>`
+      ? `<div class="empty-state"><h3>켜진 소스가 없어요.</h3><p>Hacker News, GitHub, RSS 중 하나를 켜면 소식을 만들 수 있어요.</p><button class="button primary" data-action="seed-sources">기본 소스 켜기</button></div>`
       : "";
     container.innerHTML = emptyBanner + sources.map(renderSourceCard).join("");
     bindSourceActions(container);
@@ -597,7 +648,7 @@ async function loadActivity() {
       ...(feedbackData.events || []).map(activityFromFeedback),
     ].sort((a, b) => new Date(b.time) - new Date(a.time));
     if (!items.length) {
-      container.innerHTML = `<div class="empty-state"><h3>아직 활동 기록이 없어요.</h3><p>오늘의 신호를 받으면 이곳에 기록이 남아요.</p></div>`;
+      container.innerHTML = `<div class="empty-state"><h3>아직 활동 기록이 없어요.</h3><p>오늘의 소식을 받으면 이곳에 기록이 남아요.</p></div>`;
       return;
     }
     container.innerHTML = items.slice(0, 18).map(renderActivityItem).join("");
@@ -612,9 +663,9 @@ function activityFromPipeline(run) {
   const hasWarnings = run.error_message || Object.keys(summary.errors_by_source || {}).length;
   return {
     time: run.completed_at || run.started_at,
-    title: `${formatTime(run.completed_at || run.started_at)} 오늘의 신호를 만들었어요`,
-    body: `총 ${run.source_item_count || 0}개 후보를 확인하고 신호 ${run.signal_count || 0}개를 골랐어요.`,
-    detail: hasWarnings ? "일부 소스에서 데이터를 가져오지 못했지만, 가능한 소스로 신호를 만들었어요." : "브리핑 생성이 정상적으로 끝났어요.",
+    title: `${formatTime(run.completed_at || run.started_at)} 오늘의 소식을 만들었어요`,
+    body: `총 ${run.source_item_count || 0}개 후보를 확인하고 소식 ${run.signal_count || 0}개를 골랐어요.`,
+    detail: hasWarnings ? "일부 소스에서 데이터를 가져오지 못했지만, 가능한 소스로 소식을 만들었어요." : "브리핑 생성이 정상적으로 끝났어요.",
     raw: run,
   };
 }
@@ -630,12 +681,12 @@ function activityFromSync(run) {
 }
 
 function activityFromFeedback(event) {
-  const messages = { saved: "신호를 저장했어요", ignored: "비슷한 신호를 줄이기로 했어요", tracked: "흐름을 계속 추적하기로 했어요", opened: "원문을 열어봤어요" };
+  const messages = { saved: "소식을 저장했어요", ignored: "비슷한 소식을 줄이기로 했어요", tracked: "흐름을 계속 추적하기로 했어요", opened: "원문을 열어봤어요" };
   return {
     time: event.created_at,
     title: `${formatTime(event.created_at)} ${messages[event.event_type] || "활동을 기록했어요"}`,
-    body: event.signal_title ? `관련 신호: ${event.signal_title}` : "브리핑 사용 흐름을 반영했어요.",
-    detail: "이 기록은 다음 신호를 더 잘 고르는 데 사용돼요.",
+    body: event.signal_title ? `관련 소식: ${event.signal_title}` : "브리핑 사용 흐름을 반영했어요.",
+    detail: "이 기록은 다음 소식을 더 잘 고르는 데 사용돼요.",
     raw: event,
   };
 }
@@ -703,7 +754,7 @@ async function completeOnboarding(event) {
   }
   const submit = document.getElementById("onboarding-submit");
   const original = submit.textContent;
-  setBusy(submit, true, "첫 신호를 준비하는 중");
+  setBusy(submit, true, "첫 소식을 준비하는 중");
   try {
     const roleCustom = document.getElementById("onboarding-role-custom").value.trim();
     const role = roleCustom || state.onboardingRole;
@@ -719,7 +770,7 @@ async function completeOnboarding(event) {
       body: JSON.stringify({
         role,
         role_detail: role,
-        goals: ["오늘 볼 신호를 빠르게 이해하기"],
+        goals: ["오늘 볼 소식을 빠르게 이해하기"],
         interest_types: state.onboardingKeywords,
         keywords: state.onboardingKeywords,
         preferred_signal_count: signalCount,
@@ -738,7 +789,7 @@ async function completeOnboarding(event) {
     closeOnboarding();
     switchTab("signals");
     await generateSignals(submit);
-    showToast("첫 오늘의 신호가 준비됐어요.");
+    showToast("첫 오늘의 소식이 준비됐어요.");
   } catch (error) {
     showToast(error.message);
   } finally {
@@ -921,7 +972,7 @@ function formatEntitlementSummary(entitlements = {}) {
   const signalLimit = entitlements.max_signals_per_day ?? "-";
   const sourceLimit = entitlements.max_sources ?? "-";
   const autoBriefing = entitlements.auto_briefing_enabled ? "자동 브리핑 가능" : "자동 브리핑 제한";
-  return `하루 신호 ${signalLimit}개 · 소스 ${sourceLimit}개 · ${autoBriefing}`;
+  return `하루 소식 ${signalLimit}개 · 소스 ${sourceLimit}개 · ${autoBriefing}`;
 }
 
 function formatDateTime(value) {
@@ -974,13 +1025,13 @@ function renderSignalCountGateNote() {
   const limit = Number(signalGate?.limit_value || 3);
   const value = Number(select.value || 3);
   note.textContent = value > limit
-    ? `현재는 저장할 수 있어요. 다만 ${state.featureGates?.plan || "Free"} 기준에서는 오늘의 신호 ${limit}개가 기본이에요.`
+    ? `현재는 저장할 수 있어요. 다만 ${state.featureGates?.plan || "Free"} 기준에서는 오늘의 소식 ${limit}개가 기본이에요.`
     : "";
 }
 
 function gateTitle(key) {
   return {
-    today_signal_count: "오늘 신호 개수",
+    today_signal_count: "오늘 소식 개수",
     daily_generate_limit: "하루 생성 횟수",
     source_count: "소스 수",
     auto_briefing: "자동 브리핑",
@@ -1025,7 +1076,7 @@ function showToast(message) {
 }
 
 function statusPill(status) {
-  const labels = { saved: "저장됨", ignored: "줄이는 중", tracked: "추적 중", active: "사용 중", new: "새 신호" };
+  const labels = { saved: "저장됨", ignored: "줄이는 중", tracked: "추적 중", active: "사용 중", new: "새 소식" };
   return `<span class="status-chip subtle">${labels[status] || "사용 중"}</span>`;
 }
 
@@ -1051,7 +1102,7 @@ function sourceStatus(source) {
 
 function recommendationReason(signal) {
   if (signal.category) return `${humanCategory(signal.category)} 흐름과 내 관심 기준이 맞았어요.`;
-  return "최근 관심 흐름과 잘 맞는 신호예요.";
+  return "최근 관심 흐름과 잘 맞는 소식예요.";
 }
 
 function weightLabel(weight) {

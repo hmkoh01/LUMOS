@@ -8,7 +8,7 @@ def notify_signals_ready(count: int, title: str = "LUMOS", message: str = None):
 
         root = tk.Tk()
         root.withdraw()
-        text = message or f"오늘 볼 신호 {count}개를 골랐어요."
+        text = message or f"오늘 볼 소식 {count}개를 골랐어요."
         messagebox.showinfo(title, text)
         root.destroy()
         return {"sent": True, "count": count, "method": "tkinter_messagebox"}

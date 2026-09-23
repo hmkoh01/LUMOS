@@ -1,4 +1,5 @@
 from typing import Any, Dict, List
+from src.context.interest_matching import interest_terms
 
 
 class QueryPlanner:
@@ -25,15 +26,12 @@ class QueryPlanner:
         active_interests = [item for item in interests if item.get("status", "active") == "active"]
         active_interests = sorted(active_interests, key=lambda item: float(item.get("weight", 0)), reverse=True)
         keywords = [item["keyword"] for item in active_interests if item.get("keyword")]
-        keywords.extend(profile.get("interest_types_json") or [])
-        if profile.get("role"):
-            keywords.append(profile["role"])
         result = []
         for keyword in keywords:
             keyword = str(keyword).strip()
             if keyword and keyword not in result:
                 result.append(keyword)
-        return result[:8] or ["AI agent", "workflow automation", "research automation"]
+        return result[:8]
 
     def _queries_for_source(
         self,
@@ -51,13 +49,16 @@ class QueryPlanner:
             "region": source_config.get("region"),
         }
         base_params = {key: value for key, value in base_params.items() if value}
+        groups = [interest_terms(keyword) for keyword in keywords]
+        preferred = [next((term for term in group if not self._contains_korean(term)), group[0]) for group in groups if group]
+        keywords = self._unique([*preferred, *[term for group in groups for term in group]])
         english = [kw for kw in keywords if not self._contains_korean(kw)]
         korean = [kw for kw in keywords if self._contains_korean(kw)]
         primary = english or keywords
         korean_primary = korean or ["생성형 AI", "스타트업", "커리어"]
 
         if source == "github":
-            terms = primary[:4] + ["workflow automation", "recommendation system"]
+            terms = primary[:4]
             min_stars = int(source_config.get("min_stars", 20))
             sort = source_config.get("sort", "updated")
             return [
@@ -68,8 +69,8 @@ class QueryPlanner:
             story_kind = source_config.get("story_type") or source_config.get("story_kind", "topstories")
             max_story_scan = int(source_config.get("max_story_scan", 100))
             return [
-                {"query": term, "params": {**base_params, "story_type": story_kind, "max_story_scan": max_story_scan}}
-                for term in self._unique(primary[:3])[:3]
+                {"query": term, "params": {**base_params, "search": True, "story_type": story_kind, "max_story_scan": max_story_scan}}
+                for term in self._unique(primary)[:8]
             ]
         if source == "producthunt":
             terms = primary[:3] + ["productivity", "AI assistant", "research automation"]

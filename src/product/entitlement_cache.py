@@ -173,7 +173,7 @@ def cache_status_message(status: EntitlementCacheStatus) -> str:
 
 def human_entitlement_summary(entitlements: Dict[str, Any]) -> Dict[str, str]:
     return {
-        "daily_signals": f"오늘 신호 {entitlements.get('max_signals_per_day', '-')}개",
+        "daily_signals": f"오늘 소식 {entitlements.get('max_signals_per_day', '-')}개",
         "sources": f"소스 {entitlements.get('max_sources', '-')}개",
         "auto_briefing": "자동 브리핑 가능" if entitlements.get("auto_briefing_enabled") else "자동 브리핑 제한",
         "context": "개인 맥락 connector 가능" if entitlements.get("context_connectors_enabled") else "개인 맥락 connector 제한",

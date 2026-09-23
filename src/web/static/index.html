@@ -13,7 +13,7 @@
           <div class="brand-mark">L</div>
           <div>
             <h1>LUMOS</h1>
-            <p>오늘 봐야 할 신호만 조용히 골라드려요.</p>
+            <p>오늘 봐야 할 소식만 조용히 골라드려요.</p>
           </div>
         </div>
         <button class="account-chip" type="button" id="account-chip">
@@ -21,7 +21,7 @@
           <span id="account-chip-label">로컬 모드</span>
         </button>
         <nav class="nav-tabs" aria-label="주요 메뉴">
-          <button class="nav-item active" data-tab="signals">오늘의 신호</button>
+          <button class="nav-item active" data-tab="signals">오늘의 소식</button>
           <button class="nav-item" data-tab="interests">내 관심사</button>
           <button class="nav-item" data-tab="sources">소스</button>
           <button class="nav-item" data-tab="activity">활동</button>
@@ -34,9 +34,9 @@
           <div class="hero">
             <div>
               <p class="eyebrow">오늘의 브리핑</p>
-              <h2 id="signals-title">오늘 꼭 봐야 할 신호</h2>
+              <h2 id="signals-title">오늘의 소식들</h2>
               <p>영어 원문 자료도 한국어로 이해하기 쉽게 정리해드려요.</p>
-              <div class="hero-status" id="signals-status">오늘의 신호를 확인하고 있어요.</div>
+              <div class="hero-status" id="signals-status">오늘의 소식을 확인하고 있어요.</div>
             </div>
             <div class="hero-actions">
               <button class="button primary" id="generate-signals">지금 새로 받기</button>
@@ -52,10 +52,24 @@
             <div>
               <p class="eyebrow">개인화 기준</p>
               <h2 id="interests-title">내 관심사</h2>
-              <p>LUMOS가 신호를 고를 때 참고하는 기준이에요.</p>
+              <p>LUMOS가 소식을 고를 때 참고하는 기준이에요.</p>
             </div>
-            <button class="button secondary" id="sync-context">개인 맥락 동기화</button>
+            <div class="actions">
+              <button class="button primary" id="add-interest" type="button" aria-expanded="false" aria-controls="add-interest-form">키워드 추가</button>
+              <button class="button secondary" id="sync-context">개인 맥락 동기화</button>
+            </div>
           </div>
+          <form id="add-interest-form" class="card hidden">
+            <label class="form-group" for="new-interest-keyword">
+              <span>새 관심 키워드</span>
+              <input id="new-interest-keyword" type="text" maxlength="100" required placeholder="예: 콘텐츠 마케팅" />
+            </label>
+            <p id="add-interest-error" role="alert"></p>
+            <div class="actions">
+              <button class="button primary" type="submit">추가</button>
+              <button class="button secondary" id="cancel-add-interest" type="button">취소</button>
+            </div>
+          </form>
           <div id="interests-list" class="grid"></div>
         </section>
 
@@ -87,7 +101,7 @@
             <div>
               <p class="eyebrow">나에게 맞추기</p>
               <h2 id="settings-title">설정</h2>
-              <p>매일 어떤 방식으로 신호를 받을지 정해요.</p>
+              <p>매일 어떤 방식으로 소식을 받을지 정해요.</p>
             </div>
           </div>
 
@@ -160,7 +174,7 @@
                 <span class="status-chip ready">기본값 추천</span>
               </div>
               <label class="form-group">
-                <span>받을 신호 개수</span>
+                <span>받을 소식 개수</span>
                 <select id="setting-signal-count">
                   <option value="1">1개</option>
                   <option value="3">3개</option>
@@ -219,7 +233,7 @@
               <div class="mode-list">
                 <label class="mode-option">
                   <input type="radio" name="generate-mode" value="mock" />
-                  <span><strong>안정 모드</strong><small>샘플 데이터를 기반으로 안정적으로 신호를 만들어요.</small></span>
+                  <span><strong>안정 모드</strong><small>샘플 데이터를 기반으로 안정적으로 소식을 만들어요.</small></span>
                 </label>
                 <label class="mode-option">
                   <input type="radio" name="generate-mode" value="hybrid" />
@@ -256,7 +270,7 @@
         <form id="onboarding-form">
           <section class="onboarding-step active" data-step="1">
             <h3>어떤 일을 하고 있나요?</h3>
-            <p>LUMOS가 신호를 고를 기준을 알려주세요.</p>
+            <p>LUMOS가 소식을 고를 기준을 알려주세요.</p>
             <div class="choice-grid" id="role-options">
               <button type="button" class="choice selected" data-role="예비 창업자 / PM">예비 창업자 / PM</button>
               <button type="button" class="choice" data-role="취업 준비생">취업 준비생</button>
@@ -290,10 +304,10 @@
 
           <section class="onboarding-step" data-step="3">
             <h3>어떻게 받을까요?</h3>
-            <p>개인 맥락은 사용자가 켠 경우에만 사용해요. 원문 전체가 아니라 신호를 고르기 위한 일부 요약과 키워드 중심으로 참고합니다.</p>
+            <p>개인 맥락은 사용자가 켠 경우에만 사용해요. 원문 전체가 아니라 소식을 고르기 위한 일부 요약과 키워드 중심으로 참고합니다.</p>
             <div class="form-grid">
               <label class="form-group">
-                <span>받을 신호 개수</span>
+                <span>받을 소식 개수</span>
                 <select id="onboarding-signal-count">
                   <option value="1">1개</option>
                   <option value="3" selected>3개</option>
@@ -336,13 +350,13 @@
           <div class="onboarding-actions">
             <button class="button secondary" type="button" id="onboarding-prev">이전</button>
             <button class="button primary" type="button" id="onboarding-next">다음</button>
-            <button class="button primary hidden" type="submit" id="onboarding-submit">오늘의 신호 받기</button>
+            <button class="button primary hidden" type="submit" id="onboarding-submit">오늘의 소식 받기</button>
           </div>
         </form>
       </div>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260923-news"></script>
   </body>
 </html>

@@ -6,6 +6,7 @@ from email.utils import parsedate_to_datetime
 from typing import Callable, Dict, List, Optional, Set
 
 from src.sources.collectors.base import BaseCollector, CollectedItem, CollectorResult, SourceQuery, build_source_item_id
+from src.context.interest_matching import matches_interest
 
 
 class RSSCollector(BaseCollector):
@@ -80,18 +81,18 @@ class RSSCollector(BaseCollector):
                     summary=summary[:500],
                     author=author[:120],
                     published_at=published_at,
-                    metrics_json={"feed_title": feed_title, "category": category, "matched_query": bool(query_terms and any(term in haystack for term in query_terms))},
+                    metrics_json={"feed_title": feed_title, "category": category, "matched_query": bool(query_terms and any(matches_interest(haystack, term) for term in query_terms))},
                     raw_json={"feed_url": feed_url, "feed_title": feed_title, "format": root.tag.split("}", 1)[-1]},
                     route_id=route_id,
                 )
             )
-            if query_terms and any(term in haystack for term in query_terms):
+            if query_terms and any(matches_interest(haystack, term) for term in query_terms):
                 matched_items.append(item)
             else:
                 fallback_items.append(item)
             if len(matched_items) >= limit:
                 break
-        return (matched_items + fallback_items)[:limit]
+        return (matched_items if query_terms else fallback_items)[:limit]
 
     def _query_terms(self, queries: List[SourceQuery]) -> List[str]:
         terms = []

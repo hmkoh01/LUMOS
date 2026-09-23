@@ -10,6 +10,7 @@ SCHEMA_STATEMENTS = [
         desktop_push_enabled INTEGER NOT NULL DEFAULT 1,
         generate_mode TEXT NOT NULL DEFAULT 'mock',
         sync_before_briefing INTEGER NOT NULL DEFAULT 1,
+        auto_expand_interests INTEGER NOT NULL DEFAULT 0,
         context_sync_interval_minutes INTEGER NOT NULL DEFAULT 360,
         max_interest_keywords INTEGER NOT NULL DEFAULT 50,
         mode_enabled INTEGER NOT NULL DEFAULT 1,
@@ -228,6 +229,7 @@ MIGRATION_COLUMNS = {
     "user_settings": {
         "generate_mode": "TEXT NOT NULL DEFAULT 'mock'",
         "sync_before_briefing": "INTEGER NOT NULL DEFAULT 1",
+        "auto_expand_interests": "INTEGER NOT NULL DEFAULT 0",
         "context_sync_interval_minutes": "INTEGER NOT NULL DEFAULT 360",
         "max_interest_keywords": "INTEGER NOT NULL DEFAULT 50",
     },

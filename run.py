@@ -70,7 +70,7 @@ def run_demo_seed():
     print(f"데모 DB를 준비했어요: {result['db_path']}")
     print("역할: 예비 창업자 / PM")
     print(f"관심사: {len(result['interests'])}개")
-    print(f"오늘의 신호: {len(result['signals'])}개")
+    print(f"오늘의 소식: {len(result['signals'])}개")
     print("생성 방식: 안정 모드")
 
 

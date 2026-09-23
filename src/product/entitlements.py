@@ -12,7 +12,7 @@ class PlanEntitlement:
 
 
 FREE_ENTITLEMENTS: Dict[str, PlanEntitlement] = {
-    "max_signals_per_day": PlanEntitlement("max_signals_per_day", "3", "하루에 받을 수 있는 신호 수"),
+    "max_signals_per_day": PlanEntitlement("max_signals_per_day", "3", "하루에 받을 수 있는 소식 수"),
     "max_sources": PlanEntitlement("max_sources", "3", "기본 소스 수"),
     "auto_briefing_enabled": PlanEntitlement("auto_briefing_enabled", "false", "자동 브리핑"),
     "advanced_sources_enabled": PlanEntitlement("advanced_sources_enabled", "false", "고급 소스"),
@@ -23,7 +23,7 @@ FREE_ENTITLEMENTS: Dict[str, PlanEntitlement] = {
 
 PRO_ENTITLEMENTS: Dict[str, PlanEntitlement] = {
     **FREE_ENTITLEMENTS,
-    "max_signals_per_day": PlanEntitlement("max_signals_per_day", "10", "Pro 하루 신호 수"),
+    "max_signals_per_day": PlanEntitlement("max_signals_per_day", "10", "Pro 하루 소식 수"),
     "max_sources": PlanEntitlement("max_sources", "8", "Pro 소스 수"),
     "auto_briefing_enabled": PlanEntitlement("auto_briefing_enabled", "true", "자동 브리핑"),
     "advanced_sources_enabled": PlanEntitlement("advanced_sources_enabled", "true", "고급 소스"),

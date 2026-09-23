@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from src.api.dependencies import get_store
@@ -19,6 +19,17 @@ class InterestUpdate(BaseModel):
     weight: Optional[float] = Field(default=None, ge=0)
     category: Optional[str] = None
     status: Optional[str] = None
+
+
+class InterestCreate(BaseModel):
+    keyword: str = Field(min_length=1, max_length=100)
+
+
+@router.post("/interests")
+def add_interest(request: InterestCreate, store: SQLiteStore = Depends(get_store)):
+    if not request.keyword.strip():
+        raise HTTPException(status_code=422, detail="키워드를 입력해주세요.")
+    return {"success": True, "interest": store.add_manual_interest(request.keyword)}
 
 
 @router.post("/context/sync")
@@ -58,6 +69,7 @@ def get_interests(
             status=status,
             limit=max(1, min(limit, 500)),
             include_muted=include_muted,
+            include_deleted=False,
         ),
     }
 
