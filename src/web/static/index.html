@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LUMOS</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=20261003-muted-interest-dots" />
+    <link rel="stylesheet" href="/static/styles.css?v=20261005-split-chat-panel" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark"><img src="/static/logo.png" alt="LUMOS 로고" /></div>
           <div>
             <h1>LUMOS</h1>
             <p>나만을 위한 오늘의 소식</p>
@@ -354,6 +353,14 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/static/app.js?v=20261003-scroll-preservation"></script>
+    <button class="chat-launcher" id="chat-launcher" type="button" aria-label="LUMOS에게 원문 질문하기" aria-expanded="false">
+      <img src="/icon.png" alt="" />
+    </button>
+    <aside class="chat-panel" id="chat-panel" aria-label="LUMOS 원문 대화" aria-hidden="true">
+      <header class="chat-header"><div><strong>LUMOS에게 물어보기</strong><p>추천한 원문을 바탕으로 답해드려요.</p></div><button class="chat-close" id="chat-close" type="button" aria-label="채팅 닫기">×</button></header>
+      <div class="chat-messages" id="chat-messages" aria-live="polite"><div class="chat-message assistant">오늘 추천한 원문에 대해 궁금한 점을 물어보세요.</div></div>
+      <form class="chat-form" id="chat-form"><textarea id="chat-input" rows="2" placeholder="예: 이 소식이 왜 중요한가요?"></textarea><button class="button primary" type="submit">보내기</button></form>
+    </aside>
+    <script src="/static/app.js?v=20261005-source-chat"></script>
   </body>
 </html>

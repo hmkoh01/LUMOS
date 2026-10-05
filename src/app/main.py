@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api.routes import router
 from src.app.lifecycle import initialize_app
-from src.app.resource_paths import web_landing_dir, web_static_dir
+from src.app.resource_paths import bundled_root, web_landing_dir, web_static_dir
 from src.app.version import APP_VERSION
 
 
@@ -47,6 +47,11 @@ def health():
 @app.get("/app")
 def web_app():
     return FileResponse(WEB_STATIC_DIR / "index.html")
+
+
+@app.get("/icon.png")
+def chat_icon():
+    return FileResponse(bundled_root() / "icon.png")
 
 
 @app.get("/")

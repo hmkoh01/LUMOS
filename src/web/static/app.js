@@ -74,6 +74,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initAuthShell();
   bindNavigation();
   bindTopActions();
+  bindSourceChat();
   bindOnboarding();
   applyHashTab({ load: false });
   window.addEventListener("hashchange", applyHashTab);
@@ -1420,4 +1421,46 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function bindSourceChat() {
+  const launcher = document.getElementById("chat-launcher");
+  const panel = document.getElementById("chat-panel");
+  const close = document.getElementById("chat-close");
+  const form = document.getElementById("chat-form");
+  const input = document.getElementById("chat-input");
+  const setOpen = (open) => {
+    panel.classList.toggle("open", open);
+    document.querySelector(".app-shell")?.classList.toggle("chat-open", open);
+    launcher.classList.toggle("hidden", open);
+    panel.setAttribute("aria-hidden", String(!open));
+    launcher.setAttribute("aria-expanded", String(open));
+    if (open) input.focus();
+  };
+  launcher.addEventListener("click", () => setOpen(!panel.classList.contains("open")));
+  close.addEventListener("click", () => setOpen(false));
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const message = input.value.trim();
+    if (!message) return;
+    appendChatMessage("user", message);
+    input.value = "";
+    input.disabled = true;
+    try {
+      const data = await api("/api/v1/chat", { method: "POST", body: JSON.stringify({ message }) });
+      appendChatMessage("assistant", data.answer, data.sources || []);
+    } catch (error) {
+      appendChatMessage("assistant", "답변을 준비하지 못했어요. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      input.disabled = false;
+      input.focus();
+    }
+  });
+}
+
+function appendChatMessage(role, text, sources = []) {
+  const container = document.getElementById("chat-messages");
+  const links = sources.filter((source) => source.url).map((source) => `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">원문: ${escapeHtml(source.title)}</a>`).join("");
+  container.insertAdjacentHTML("beforeend", `<div class="chat-message ${role}">${escapeHtml(text)}${links ? `<div class="chat-sources">${links}</div>` : ""}</div>`);
+  container.scrollTop = container.scrollHeight;
 }

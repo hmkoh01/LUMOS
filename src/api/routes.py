@@ -12,6 +12,7 @@ from src.api.routes_preview import router as routes_preview_router
 from src.api.settings import router as settings_router
 from src.api.signals import router as signals_router
 from src.api.sources import router as sources_router
+from src.api.chat import router as chat_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(settings_router)
@@ -26,3 +27,4 @@ router.include_router(signals_router)
 router.include_router(feedback_router)
 router.include_router(pipeline_runs_router)
 router.include_router(sources_router)
+router.include_router(chat_router)
