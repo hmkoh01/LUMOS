@@ -52,9 +52,14 @@ class HackerNewsCollector(BaseCollector):
 
     def _collect_search(self, queries: List[SourceQuery], limit: int) -> CollectorResult:
         items, errors, seen = [], [], set()
-        for query in queries:
-            if not query.query.strip():
-                continue
+        valid_queries = [query for query in queries if query.query.strip()]
+        # Do not let the first (usually highest-weight) interest consume the
+        # entire route limit. Each interest gets an initial chance to supply
+        # evidence; ranking can still choose repeats when no other interest
+        # produces enough candidates.
+        per_query_limit = max(1, (limit + max(1, len(valid_queries)) - 1) // max(1, len(valid_queries)))
+        for query in valid_queries:
+            collected_for_query = 0
             params = urlencode({"query": query.query, "tags": "story", "hitsPerPage": 50,
                                 "restrictSearchableAttributes": "title",
                                 "numericFilters": f"created_at_i>{int(time.time()) - 180 * 86400}"})
@@ -77,7 +82,8 @@ class HackerNewsCollector(BaseCollector):
                     item.raw_json["search_query"] = query.query
                     items.append(item)
                     seen.add(item.source_item_id)
-                    if len(items) >= limit:
+                    collected_for_query += 1
+                    if len(items) >= limit or collected_for_query >= per_query_limit:
                         break
             except Exception as exc:
                 errors.append(f"search {query.query}: {exc}")

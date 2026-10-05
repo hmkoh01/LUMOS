@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
@@ -25,9 +26,13 @@ class SeedDefaultsRequest(BaseModel):
 def get_catalog(store: SQLiteStore = Depends(get_store)):
     configs = store.get_source_configs()
     registry = CollectorRegistry()
+    sources = get_source_catalog(configs, status_lookup=lambda source_id: registry.support_status(source_id, mode="live"))
+    for source in sources:
+        if source["source_id"] == "youtube":
+            source["api_key_ready"] = bool(os.environ.get("YOUTUBE_API_KEY", "").strip())
     return {
         "success": True,
-        "sources": get_source_catalog(configs, status_lookup=lambda source_id: registry.support_status(source_id, mode="live")),
+        "sources": sources,
     }
 
 

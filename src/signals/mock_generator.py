@@ -2,6 +2,7 @@ from datetime import date
 from typing import Any, Dict, List
 
 from src.signals.korean_briefing import build_korean_briefing
+from src.signals.provenance import source_metadata
 from src.storage.sqlite_store import SQLiteStore
 
 
@@ -67,6 +68,7 @@ class MockSignalGenerator:
             role=role,
             action_hint=action,
         )
+        metadata.update(source_metadata({"source": "mock", "raw_json": {"mock": True, "generation_mode": "mock"}}))
         return {
             "signal_date": date.today().isoformat(),
             "title": title,

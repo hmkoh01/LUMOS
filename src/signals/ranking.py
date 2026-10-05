@@ -19,21 +19,41 @@ class RankingService:
 
     def rank(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         recent_titles = [signal["title"].lower() for signal in self.store.get_recent_signals(limit=50)]
+        interest_weights = {item["keyword"]: float(item.get("weight") or 0)
+                            for item in self.store.get_interests(status="active", limit=None)}
+        max_interest_weight = max(interest_weights.values(), default=1.0)
         ranked = []
         for candidate in candidates:
-            breakdown = self.score_breakdown(candidate, recent_titles)
-            final_score = sum(breakdown[key] * weight for key, weight in self.WEIGHTS.items())
+            breakdown = self.score_breakdown(candidate, recent_titles, interest_weights, max_interest_weight)
+            youtube_score = (candidate.get("raw_json") or {}).get("youtube_scoring") or {}
+            # YouTube candidates have already been evaluated against verified
+            # video and channel metadata. Keep the 0-100 diagnostic score, but
+            # convert it to the pipeline's existing 0-1 score scale.
+            if candidate.get("source") == "youtube" and "finalScore" in youtube_score:
+                final_score = float(youtube_score["finalScore"]) / 100.0
+                breakdown["youtube"] = youtube_score
+            else:
+                final_score = sum(breakdown[key] * weight for key, weight in self.WEIGHTS.items())
             final_score = round(final_score, 4)
             self.store.update_signal_candidate_score(candidate["id"], final_score, breakdown)
             candidate["score"] = final_score
             candidate["score_breakdown_json"] = breakdown
             candidate["status"] = "ranked"
             ranked.append(candidate)
-        return sorted(ranked, key=lambda item: item["score"], reverse=True)
+        return sorted(ranked, key=lambda item: (-item["score"], item["id"]))
 
-    def score_breakdown(self, candidate: Dict[str, Any], recent_titles: List[str]) -> Dict[str, float]:
+    def score_breakdown(
+        self,
+        candidate: Dict[str, Any],
+        recent_titles: List[str],
+        interest_weights: Dict[str, float] = None,
+        max_interest_weight: float = 1.0,
+    ) -> Dict[str, float]:
         matched = candidate.get("matched_keywords_json") or []
-        relevance = min(1.0, 0.25 + 0.25 * len(matched)) if matched else 0.25
+        weights = [float((interest_weights or {}).get(keyword, 1.0)) for keyword in matched]
+        relative_weight = (sum(weights) / len(weights)) / max(1.0, float(max_interest_weight)) if weights else 0.0
+        relevance = min(1.0, 0.1 + 0.7 * relative_weight + 0.1 * min(len(matched), 2)) if matched else 0.25
+        relevance = max(0.05, relevance)
         recency = self._recency_score(candidate.get("published_at") or candidate.get("collected_at"))
         source = candidate.get("source")
         metadata = SOURCE_REGISTRY.get(source)

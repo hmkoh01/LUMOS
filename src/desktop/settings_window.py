@@ -17,7 +17,6 @@ class SettingsWindow:
         self.connector_vars = {}
         self.connector_config_vars = {}
         self.status_text = tk.StringVar(value="")
-        self.sync_status_text = tk.StringVar(value="")
         self.interests_text = tk.StringVar(value="")
         self.evidence_text = tk.StringVar(value="")
         self.interests_frame = None
@@ -48,11 +47,6 @@ class SettingsWindow:
 
         self.desktop_push_enabled = tk.BooleanVar(value=bool(settings.get("desktop_push_enabled", True)))
         ttk.Checkbutton(basic, text="Desktop popup enabled", variable=self.desktop_push_enabled).grid(row=3, column=0, columnspan=2, sticky="w")
-        self.sync_before_briefing = tk.BooleanVar(value=bool(settings.get("sync_before_briefing", True)))
-        ttk.Checkbutton(basic, text="Sync context before briefing", variable=self.sync_before_briefing).grid(row=4, column=0, columnspan=2, sticky="w")
-        ttk.Label(basic, text="Sync interval minutes").grid(row=5, column=0, sticky="w")
-        self.context_sync_interval = tk.IntVar(value=int(settings.get("context_sync_interval_minutes", 360)))
-        ttk.Spinbox(basic, from_=5, to=1440, textvariable=self.context_sync_interval, width=8).grid(row=5, column=1, sticky="w", padx=8)
 
         sources = ttk.LabelFrame(main, text="Sources", padding=10)
         sources.pack(fill="both", expand=True, pady=10)
@@ -93,9 +87,7 @@ class SettingsWindow:
         for connector_type in ["notion", "google_drive", "chatgpt_export", "claude_export"]:
             ttk.Label(context, text=f"{connector_type}: coming later").grid(row=row, column=0, columnspan=3, sticky="w")
             row += 1
-        ttk.Button(context, text="Sync Now", command=self.sync_now).grid(row=row, column=0, sticky="w", pady=6)
-        ttk.Label(context, textvariable=self.sync_status_text).grid(row=row, column=1, columnspan=2, sticky="w")
-        ttk.Label(context, textvariable=self.interests_text, wraplength=680).grid(row=row + 1, column=0, columnspan=3, sticky="w")
+        ttk.Label(context, textvariable=self.interests_text, wraplength=680).grid(row=row, column=0, columnspan=3, sticky="w")
         context.columnconfigure(1, weight=1)
 
         interests_box = ttk.LabelFrame(main, text="My Interests", padding=10)
@@ -117,8 +109,6 @@ class SettingsWindow:
                 "briefing_time": self.briefing_time.get(),
                 "desktop_push_enabled": self.desktop_push_enabled.get(),
                 "generate_mode": self.generate_mode.get(),
-                "sync_before_briefing": self.sync_before_briefing.get(),
-                "context_sync_interval_minutes": self.context_sync_interval.get(),
             }
         )
         configs = {item["source_id"]: item for item in self.service.list_source_configs()}
@@ -147,14 +137,6 @@ class SettingsWindow:
         if config.get("source_id") == "github":
             return "ready, token optional"
         return "ready"
-
-    def sync_now(self):
-        self.save()
-        result = self.service.sync_context(connector_types=["browser_history", "local_files"], limit=100)
-        self.sync_status_text.set(
-            f"Synced {result['item_count']} items, updated {result['keyword_count']} keyword groups."
-        )
-        self.refresh_interests()
 
     def refresh_interests(self):
         interests = self.service.get_interests(limit=20, include_muted=True)

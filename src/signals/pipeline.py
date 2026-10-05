@@ -209,7 +209,11 @@ class SignalPipeline:
                 errors_by_source.setdefault(source, []).extend(result.errors + result.warnings)
             if result.items:
                 successful_sources.append(source)
-                raw_items.extend(result.item_dicts())
+                for item in result.item_dicts():
+                    raw = item.setdefault("raw_json", {})
+                    raw["data_kind"] = "mock" if raw.get("mock") else "live"
+                    raw["generation_mode"] = mode
+                    raw_items.append(item)
             elif result.errors or result.warnings:
                 failed_sources.append(source)
 

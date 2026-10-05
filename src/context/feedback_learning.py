@@ -28,16 +28,19 @@ def keywords_from_signal(signal: Dict[str, Any], max_keywords: int = 8) -> List[
     return extract_keywords(text, max_keywords=max_keywords)
 
 
-def apply_feedback_learning(store: SQLiteStore, signal_id: int, event_type: str, payload: Dict[str, Any] = None) -> List[str]:
-    if not store.get_settings().get("auto_expand_interests", False):
-        return []
+def apply_feedback_learning(
+    store: SQLiteStore,
+    signal_id: int,
+    event_type: str,
+    payload: Dict[str, Any] = None,
+    multiplier: float = 1.0,
+) -> List[str]:
     if event_type not in FEEDBACK_DELTAS or signal_id <= 0:
         return []
     signal = store.get_signal(signal_id)
     if not signal:
         return []
-    delta = FEEDBACK_DELTAS[event_type]
-    reactivate = event_type == "tracked"
+    delta = FEEDBACK_DELTAS[event_type] * multiplier
     updated = []
     evidence = {
         "event_type": event_type,
@@ -45,35 +48,20 @@ def apply_feedback_learning(store: SQLiteStore, signal_id: int, event_type: str,
         "category": signal.get("category"),
         "payload": payload or {},
     }
-    if signal.get("category"):
-        store.adjust_interest_weight(
-            signal["category"],
-            delta=delta,
-            category="signal_category",
-            source="feedback",
-            evidence=evidence,
-            reactivate=reactivate,
-        )
-        updated.append(signal["category"])
-    if signal.get("source_name"):
-        store.adjust_interest_weight(
-            signal["source_name"],
-            delta=delta * 0.5,
-            category="signal_source",
-            source="feedback",
-            evidence=evidence,
-            reactivate=reactivate,
-        )
-        updated.append(signal["source_name"])
-    for item in keywords_from_signal(signal):
-        keyword = item["keyword"]
-        store.adjust_interest_weight(
-            keyword,
-            delta=delta * float(item.get("score", 1.0)),
-            category="feedback_keyword",
-            source="feedback",
-            evidence={**evidence, "keyword": item},
-            reactivate=reactivate,
-        )
-        updated.append(keyword)
+    keyword_scores = {
+        str(item.get("keyword", "")).strip().casefold(): float(item.get("score", 1.0))
+        for item in keywords_from_signal(signal)
+        if str(item.get("keyword", "")).strip()
+    }
+    for value in (signal.get("category"), signal.get("source_name")):
+        if value:
+            keyword_scores.setdefault(str(value).strip().casefold(), 1.0)
+
+    for interest in store.get_interests(status="active", limit=None):
+        score = keyword_scores.get(str(interest.get("keyword", "")).casefold())
+        if score is None:
+            continue
+        next_weight = max(0.1, min(10.0, float(interest.get("weight") or 1.0) + delta * score))
+        store.update_interest(interest["keyword"], weight=next_weight)
+        updated.append(interest["keyword"])
     return updated

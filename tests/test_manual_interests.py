@@ -9,6 +9,28 @@ from src.storage.sqlite_store import SQLiteStore
 
 
 class ManualInterestsTest(unittest.TestCase):
+    def test_interest_list_keeps_added_order_when_weight_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteStore(Path(directory) / "test.db")
+            store.add_manual_interest("first interest")
+            store.add_manual_interest("second interest")
+            store.update_interest("first interest", weight=10)
+            store.update_interest("second interest", weight=0.1)
+
+            interests = store.get_interests(include_deleted=False)
+            self.assertEqual([interest["keyword"] for interest in interests], ["first interest", "second interest"])
+
+    def test_muted_interests_are_listed_after_active_interests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteStore(Path(directory) / "test.db")
+            store.add_manual_interest("highest weight")
+            store.add_manual_interest("active interest")
+            store.update_interest("highest weight", weight=10)
+            store.mute_interest("highest weight")
+
+            interests = store.get_interests(include_muted=True, include_deleted=False)
+            self.assertEqual([interest["keyword"] for interest in interests], ["active interest", "highest weight"])
+
     def test_add_persist_deduplicate_delete_and_restore(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.db"
@@ -32,7 +54,6 @@ class ManualInterestsTest(unittest.TestCase):
                     persisted = SQLiteStore(path)
                     self.assertEqual(len(persisted.get_interests()), 1)
                     self.assertTrue(persisted.get_settings()["onboarding_completed"])
-                    self.assertFalse(persisted.get_settings()["auto_expand_interests"])
             finally:
                 app.dependency_overrides.pop(get_store, None)
 

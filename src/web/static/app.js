@@ -4,7 +4,14 @@ const state = {
   connectors: [],
   sources: [],
   interests: [],
+  interestRecommendations: [],
+  feedbackSignals: [],
+  feedbackMode: null,
   signals: [],
+  savedSignals: [],
+  hasMoreSignals: false,
+  signalRunId: null,
+  loadingMoreSignals: false,
   activeTab: "signals",
   onboardingStep: 1,
   onboardingRole: "예비 창업자 / PM",
@@ -33,7 +40,7 @@ const sourceCopy = {
   official_ai_blogs: ["Official AI Blogs", "주요 AI 회사의 공식 발표와 연구 업데이트를 확인해요."],
   producthunt: ["Product Hunt", "새 제품 출시 흐름을 볼 수 있도록 준비하고 있어요."],
   reddit: ["Reddit", "커뮤니티 반응을 조심스럽게 선별할 수 있도록 준비하고 있어요."],
-  youtube: ["YouTube", "영상과 크리에이터 흐름을 볼 수 있도록 준비하고 있어요."],
+  youtube: ["YouTube", "영상과 크리에이터의 최근 흐름을 수집해요."],
   naver_news: ["Naver News", "국내 산업과 기업 뉴스를 볼 수 있도록 준비하고 있어요."],
   arxiv: ["arXiv", "연구 논문 흐름을 볼 수 있도록 준비하고 있어요."],
   company_newsroom: ["Company Newsrooms", "회사 공식 뉴스룸을 더 편하게 연결할 수 있도록 준비하고 있어요."],
@@ -43,6 +50,9 @@ const sourceOrder = ["hackernews", "github", "rss", "official_ai_blogs", "produc
 const hashToTab = {
   "#today": "signals",
   "#signals": "signals",
+  "#saved": "saved",
+  "#tracked": "tracked",
+  "#ignored": "ignored",
   "#interests": "interests",
   "#sources": "sources",
   "#activity": "activity",
@@ -50,6 +60,9 @@ const hashToTab = {
 };
 const tabToHash = {
   signals: "#today",
+  saved: "#saved",
+  tracked: "#tracked",
+  ignored: "#ignored",
   interests: "#interests",
   sources: "#sources",
   activity: "#activity",
@@ -57,14 +70,17 @@ const tabToHash = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  const initialScrollPosition = readStoredScrollPosition();
   initAuthShell();
   bindNavigation();
   bindTopActions();
   bindOnboarding();
   applyHashTab({ load: false });
   window.addEventListener("hashchange", applyHashTab);
-  loadInitialData().then(() => {
-    if (state.activeTab !== "signals") loadTab(state.activeTab);
+  window.addEventListener("pagehide", storeScrollPosition);
+  loadInitialData().then(async () => {
+    if (state.activeTab !== "signals") await loadTab(state.activeTab);
+    restoreScrollPosition(initialScrollPosition);
   });
 });
 
@@ -107,14 +123,16 @@ function setActiveTab(tab, options = {}) {
 
 function bindTopActions() {
   document.getElementById("generate-signals").addEventListener("click", () => generateSignals());
-  document.getElementById("refresh-signals").addEventListener("click", loadSignals);
-  document.getElementById("sync-context").addEventListener("click", syncContext);
+  document.getElementById("view-saved-signals").addEventListener("click", () => setActiveTab("saved", { updateHash: true, load: true }));
+  document.getElementById("refresh-saved-signals").addEventListener("click", loadSavedSignals);
+  document.getElementById("show-tracked-feedback").addEventListener("click", () => setActiveTab("tracked", { updateHash: true, load: true }));
+  document.getElementById("show-ignored-feedback").addEventListener("click", () => setActiveTab("ignored", { updateHash: true, load: true }));
+  document.querySelectorAll("[data-back-to-saved]").forEach((button) => button.addEventListener("click", closeFeedbackSignals));
   document.getElementById("refresh-activity").addEventListener("click", loadActivity);
   document.getElementById("settings-form").addEventListener("submit", saveSettings);
   document.getElementById("add-interest").addEventListener("click", openInterestForm);
   document.getElementById("cancel-add-interest").addEventListener("click", closeInterestForm);
   document.getElementById("add-interest-form").addEventListener("submit", addManualInterest);
-  document.getElementById("account-chip")?.addEventListener("click", () => setActiveTab("settings", { updateHash: true, load: true }));
   document.querySelectorAll("[data-account-action]").forEach((button) => {
     button.addEventListener("click", () => handleAccountAction(button.dataset.accountAction));
   });
@@ -155,6 +173,8 @@ async function loadInitialData() {
 
 async function loadTab(tab) {
   if (tab === "signals") await loadSignals();
+  if (tab === "saved") await loadSavedSignals();
+  if (tab === "tracked" || tab === "ignored") await openFeedbackSignals(tab);
   if (tab === "interests") await loadInterests();
   if (tab === "sources") await loadSources();
   if (tab === "activity") await loadActivity();
@@ -222,38 +242,126 @@ async function loadFeatureGates() {
   renderGateSummary();
 }
 
-async function loadSignals(render = true) {
+async function loadSignals(render = true, scrollPosition = render ? captureScrollPosition() : null) {
   const container = document.getElementById("signals-list");
   if (render) showLoading("signals-list", "오늘의 소식을 불러오고 있어요.");
   try {
     const data = await api("/api/v1/signals/today");
     state.signals = (data.signals || []).filter((signal) => signal.status !== "archived");
+    state.hasMoreSignals = Boolean(data.has_more);
+    state.signalRunId = data.pipeline_run_id;
     if (render) renderSignals();
   } catch (error) {
     if (render) {
       container.innerHTML = emptyState("잠시 연결이 불안정해요.", "다시 시도해보세요.", "새로고침", "retry-signals");
       bindEmptyAction("retry-signals", loadSignals);
     }
+  } finally {
+    restoreScrollPosition(scrollPosition);
   }
 }
 
 function renderSignals() {
   const container = document.getElementById("signals-list");
-  document.getElementById("signals-status").textContent = state.signals.length
-    ? `오늘의 소식 ${state.signals.length}개가 준비됐어요.`
-    : "아직 오늘의 소식이 없어요. 지금 받아볼까요?";
   if (!state.signals.length) {
     container.innerHTML = emptyState(
       "아직 오늘의 소식이 없어요.",
       "지금 새로 받아보면 관심사에 맞는 변화를 한국어로 정리해드릴게요.",
-      "지금 새로 받기",
+      "소식 새로 받기",
       "generate"
     );
     bindEmptyAction("generate", () => generateSignals());
     return;
   }
-  container.innerHTML = state.signals.map(renderSignalCard).join("");
+  container.innerHTML = state.signals.map(renderSignalCard).join("") + `
+    <div class="more-signals" aria-live="polite">
+      ${state.hasMoreSignals
+        ? `<button class="button secondary" id="more-signals" ${state.loadingMoreSignals ? "disabled" : ""}>${state.loadingMoreSignals ? "추가 소식을 불러오는 중…" : "추가 신호 보기"}</button>`
+        : `<p>이번 브리핑에서 더 보여드릴 자료가 없어요. 새로운 자료는 ‘소식 새로 받기’로 찾아보세요.</p>`}
+    </div>`;
   bindSignalActions(container);
+  document.getElementById("more-signals")?.addEventListener("click", loadMoreSignals);
+}
+
+async function loadSavedSignals(render = true, scrollPosition = render ? captureScrollPosition() : null) {
+  const container = document.getElementById("saved-signals-list");
+  if (render) showLoading("saved-signals-list", "저장한 소식을 불러오고 있어요.");
+  try {
+    const data = await api("/api/v1/signals/saved");
+    state.savedSignals = data.signals || [];
+    if (render) renderSavedSignals();
+  } catch (error) {
+    if (render) {
+      container.innerHTML = emptyState("저장한 소식을 불러오지 못했어요.", "잠시 후 다시 시도해주세요.", "새로고침", "retry-saved-signals");
+      bindEmptyAction("retry-saved-signals", loadSavedSignals);
+    }
+  } finally {
+    restoreScrollPosition(scrollPosition);
+  }
+}
+
+function renderSavedSignals() {
+  const container = document.getElementById("saved-signals-list");
+  if (!state.savedSignals.length) {
+    container.innerHTML = emptyState("저장한 소식이 없어요.", "오늘의 소식에서 저장을 누르면 이곳에서 원문을 다시 볼 수 있어요.", "오늘의 소식 보기", "open-signals");
+    bindEmptyAction("open-signals", () => setActiveTab("signals", { updateHash: true, load: true }));
+    return;
+  }
+  container.innerHTML = state.savedSignals.map((signal, index) => renderSavedSignalCard(signal, index + 1)).join("");
+  container.querySelectorAll("[data-delete-saved]").forEach((button) => {
+    button.addEventListener("click", () => deleteSavedSignal(button.closest(".signal-card").dataset.signalId, button));
+  });
+  container.querySelectorAll("[data-open-url]").forEach((button) => {
+    button.addEventListener("click", () => window.open(button.dataset.openUrl, "_blank", "noopener,noreferrer"));
+  });
+}
+
+function renderSavedSignalCard(signal, rank) {
+  const sourceItems = signal.source_items_json || [];
+  const title = signal.display_title_ko || signal.title || "저장한 소식";
+  const summary = signal.headline_summary_ko || signal.display_summary_ko || signal.summary || "";
+  const url = signal.source_url || sourceItems.find((item) => item.url)?.url || "";
+  const keywordOrigin = keywordOriginText(signal);
+  return `<article class="signal-card saved-signal-card" data-signal-id="${signal.id}">
+    <div class="signal-head"><div class="rank">${rank}</div><div><h3 class="signal-title">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div>
+    <p class="signal-derived-from">${escapeHtml(keywordOrigin)}</p>
+    <div class="signal-meta"><span class="pill">출처 ${escapeHtml(signal.source_display || sourceLabel(signal.source_name || "미확인"))}</span><span class="pill">저장한 날짜 ${escapeHtml(formatSavedDate(signal.saved_at || signal.created_at))}</span></div>
+    <div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button danger" data-delete-saved>저장 목록에서 삭제</button></div>
+  </article>`;
+}
+
+async function deleteSavedSignal(signalId, button) {
+  setBusy(button, true, "삭제 중");
+  try {
+    await api(`/api/v1/signals/${signalId}/saved`, { method: "DELETE" });
+    state.savedSignals = state.savedSignals.filter((signal) => String(signal.id) !== String(signalId));
+    renderSavedSignals();
+    showToast("저장한 소식에서 삭제했어요.");
+  } catch (error) {
+    showToast(error.message);
+    setBusy(button, false, "저장 목록에서 삭제");
+  }
+}
+
+async function loadMoreSignals() {
+  if (state.loadingMoreSignals || !state.hasMoreSignals || !state.signalRunId) return;
+  state.loadingMoreSignals = true;
+  const button = document.getElementById("more-signals");
+  if (button) setBusy(button, true, "추가 소식을 불러오는 중…");
+  try {
+    await api("/api/v1/signals/more", {
+      method: "POST",
+      body: JSON.stringify({ pipeline_run_id: state.signalRunId }),
+    });
+    // Reload authoritative state: another tab may have generated a newer briefing.
+    await loadSignals(false);
+  } catch (error) {
+    showToast(error.message);
+    await loadSignals(false);
+  } finally {
+    state.loadingMoreSignals = false;
+    renderSignals();
+  }
 }
 
 function detectFirstRun() {
@@ -315,13 +423,15 @@ function renderSignalCard(signal) {
   const confidence = Math.round(Number(signal.confidence || 0) * 100);
   const sourceUrl = signal.source_url || sourceItems.find((item) => item.url)?.url || "";
   const titleKo = signal.display_title_ko || signal.title || "오늘 확인할 소식";
-  const summaryKo = signal.display_summary_ko || signal.summary || "원문에서 가져온 표현을 바탕으로 정리한 소식예요.";
-  const whyKo = signal.why_it_matters_ko || signal.why_it_matters || "지금 흐름을 이해하는 데 도움이 되는 변화예요.";
-  const reasonKo = signal.recommendation_reason_ko || recommendationReason(signal);
+  const headlineSummaryKo = signal.headline_summary_ko || signal.display_summary_ko || signal.summary || "원문에서 가져온 표현을 바탕으로 정리한 소식예요.";
+  const storedReason = signal.recommendation_reason_ko || "";
+  const reasonKo = needsRecommendationRewrite(storedReason) ? recommendationReason(signal) : storedReason;
   const actionKo = signal.recommended_action_ko || signal.recommended_action || "원문을 빠르게 훑고 계속 추적할 흐름인지 표시해보세요.";
   const originalTitle = signal.original_title || signal.title || sourceItems[0]?.title || "";
   const originalSnippet = signal.original_snippet || signal.summary || sourceItems[0]?.summary || "";
   const matchedKeywords = signal.matched_keywords || signal.metadata_json?.matched_keywords || [];
+  const helpfulTermsAndTrend = helpfulTermsAndTrendText(signal, matchedKeywords);
+  const coreSummary = cleanCoreSummary(signal.detail_summary_ko) || originalSnippet || headlineSummaryKo;
   const derivedFromKo = signal.derived_from_ko
     || (matchedKeywords.length ? `'${matchedKeywords[0]}' 키워드에서 찾은 소식` : "");
   return `
@@ -331,48 +441,75 @@ function renderSignalCard(signal) {
         <div>
           <h3 class="signal-title">${escapeHtml(titleKo)}</h3>
           ${derivedFromKo ? `<p class="signal-derived-from">${escapeHtml(derivedFromKo)}</p>` : ""}
-          <p class="signal-summary">${escapeHtml(summaryKo)}</p>
+          <p class="signal-summary">${escapeHtml(headlineSummaryKo)}</p>
         </div>
       </div>
       <div class="signal-meta">
-        <span class="pill">출처 ${escapeHtml(sourceLabel(signal.source_name || sourceItems[0]?.source || "선별 소스"))}</span>
+        <span class="pill">출처 ${escapeHtml(signal.source_display || "출처 미확인")}</span>
+        <span class="pill">${signal.data_kind === "mock" ? "샘플 자료 · 실제 최신 정보 아님" : signal.data_kind === "live" ? "외부 소스 수집 자료" : "수집 유형 미확인"}</span>
         <span class="pill">관련도 ${confidence || 70}%</span>
         <span class="pill">관련 소스 ${sourceItems.length || 1}개</span>
         ${statusPill(signal.status)}
       </div>
       <div class="signal-body">
-        <div class="info-box"><strong>왜 중요한가</strong><p>${escapeHtml(whyKo)}</p></div>
+        <div class="info-box"><strong>추천 이유</strong><p>${escapeHtml(reasonKo)}</p></div>
         <div class="info-box"><strong>다음에 볼 것</strong><p>${escapeHtml(actionKo)}</p></div>
       </div>
       <div class="actions">
         <button class="button secondary" data-feedback="saved">저장</button>
         <button class="button secondary" data-feedback="ignored">관심 없음</button>
         <button class="button secondary" data-feedback="tracked">계속 추적</button>
-        <button class="button ghost" data-open-url="${escapeHtml(sourceUrl)}" ${sourceUrl ? "" : "disabled"}>원문 보기</button>
+        <button class="button primary" data-open-url="${escapeHtml(sourceUrl)}" ${sourceUrl ? "" : "disabled"}>원문 보기</button>
       </div>
       <details class="details">
         <summary>자세히 보기</summary>
         <div class="details-content">
-          <div class="detail-block"><strong>원문 제목</strong><p>${escapeHtml(originalTitle || "원문 제목을 찾지 못했어요.")}</p></div>
-          <div class="detail-block"><strong>원문 snippet</strong><p>${escapeHtml(originalSnippet || "원문에서 가져온 짧은 설명이 아직 없어요.")}</p></div>
-          <p>제목과 요약은 제공된 원문 내용을 기준으로 표시해요.</p>
-          <p>${signal.pipeline_run_id ? "이번 브리핑을 만든 내부 기록이 있어요." : "브리핑 기록은 아직 연결되지 않았어요."}</p>
-          <p>현재 생성 방식은 ${modeLabels[state.settings?.generate_mode || "hybrid"] || "혼합 모드"}예요.</p>
-          ${sourceItems.length ? `<div class="related-list">${sourceItems.map(renderRelatedItem).join("")}</div>` : ""}
-          <div class="diagnostic-box">
-            <strong>브리핑 참고 정보</strong>
-            <span>관련도는 ${confidence || 70}%로 계산됐어요.</span>
-            <span>${signal.pipeline_run_id ? `이번 브리핑 기록 번호는 ${signal.pipeline_run_id}예요.` : "이번 브리핑 기록 번호는 아직 없어요."}</span>
-            <span>생성 방식은 ${modeLabels[state.settings?.generate_mode || "hybrid"] || "혼합 모드"}예요.</span>
-          </div>
+          <p class="detail-summary">
+            <strong>원문 제목</strong> ${escapeHtml(originalTitle || "확인되지 않았어요.")}<br><br>
+            <strong>원문의 핵심</strong> ${escapeHtml(coreSummary)}<br><br>
+            <strong>알면 좋을 용어·트렌드</strong> ${escapeHtml(helpfulTermsAndTrend)}
+          </p>
         </div>
       </details>
     </article>
   `;
 }
 
-function renderRelatedItem(item) {
-  return `<div class="related-item"><strong>${escapeHtml(sourceLabel(item.source || "소스"))}</strong><span>${escapeHtml(item.title || item.url || "관련 원문")}</span></div>`;
+function helpfulTermsAndTrendText(signal, matchedKeywords) {
+  const terms = [...new Set([
+    ...(matchedKeywords || []),
+    humanCategory(signal.category),
+  ].map(humanReadableTerm).filter(Boolean))].slice(0, 3);
+  return terms.join(" · ");
+}
+
+function cleanCoreSummary(value) {
+  return String(value || "")
+    .replace(/^이 자료의 주제:\s*[^\n]+(?:\n\s*\n)?/u, "")
+    .replace(/^제공된 설명:\s*/u, "")
+    .trim();
+}
+
+function humanReadableTerm(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const labels = {
+    AI_LLM_AGENT: "AI·언어 모델·에이전트",
+    RESEARCH: "연구",
+    STARTUP_PRODUCT: "스타트업과 제품",
+    DEVELOPER_TECH: "개발자 도구",
+    COMPANY_TRACKING: "기업 변화",
+    CONTENT_SNS: "콘텐츠와 커뮤니티",
+    CAREER: "커리어",
+    DOMESTIC_INDUSTRY: "국내 산업",
+  };
+  if (labels[raw]) return labels[raw];
+  if (/^[A-Z][A-Z0-9_]*$/.test(raw) || raw.includes("_")) return "";
+  return raw;
+}
+
+function needsRecommendationRewrite(reason) {
+  return !reason || /최근 추천 기준에|내 관심 기준|이\(가\)|관심사.+관련된 자료/u.test(String(reason));
 }
 
 function bindSignalActions(container) {
@@ -381,6 +518,7 @@ function bindSignalActions(container) {
       const card = button.closest(".signal-card");
       const eventType = button.dataset.feedback;
       const messages = { saved: "저장했어요", ignored: "비슷한 소식을 줄일게요", tracked: "이 흐름을 계속 지켜볼게요" };
+      const scrollPosition = captureScrollPosition();
       setBusy(button, true, "처리 중");
       try {
         await api(`/api/v1/signals/${card.dataset.signalId}/feedback`, {
@@ -390,6 +528,7 @@ function bindSignalActions(container) {
         showToast(messages[eventType]);
         await loadSignals(false);
         renderSignals();
+        restoreScrollPosition(scrollPosition);
       } catch (error) {
         showToast(error.message);
       } finally {
@@ -417,18 +556,24 @@ function bindSignalActions(container) {
   });
 }
 
-async function loadInterests(render = true) {
+async function loadInterests(render = true, scrollPosition = render ? captureScrollPosition() : null) {
   const container = document.getElementById("interests-list");
   if (render) showLoading("interests-list", "관심사를 불러오고 있어요.");
   try {
-    const data = await api("/api/v1/interests?include_muted=true&limit=100");
+    const [data, recommendations] = await Promise.all([
+      api("/api/v1/interests?include_muted=true&limit=100"),
+      api("/api/v1/interests/recommendations"),
+    ]);
     state.interests = (data.interests || []).filter((interest) => interest.status !== "deleted");
+    state.interestRecommendations = recommendations.recommendations || [];
     if (render) renderInterests();
   } catch (error) {
     if (render) {
       container.innerHTML = emptyState("잠시 연결이 불안정해요.", "다시 시도해보세요.", "새로고침", "retry-interests");
       bindEmptyAction("retry-interests", loadInterests);
     }
+  } finally {
+    restoreScrollPosition(scrollPosition);
   }
 }
 
@@ -442,10 +587,99 @@ function renderInterests() {
       "add-interest-keyword"
     );
     bindEmptyAction("add-interest-keyword", openInterestForm);
+    renderInterestRecommendations(container);
     return;
   }
   container.innerHTML = state.interests.map(renderInterestCard).join("");
   bindInterestActions(container);
+  renderInterestRecommendations(container);
+}
+
+function renderInterestRecommendations(container) {
+  const recommendations = state.interestRecommendations || [];
+  if (!recommendations.length) return;
+  const section = document.createElement("section");
+  section.className = "interest-recommendations";
+  section.innerHTML = `<div class="recommendation-heading"><div><p class="eyebrow">추천 키워드</p><h3>관심사와 최근 흐름에서 찾았어요</h3></div><p>아직 내 관심사에는 없지만 함께 살펴볼 만한 키워드예요.</p></div><div class="recommendation-list">${recommendations.map(renderInterestRecommendation).join("")}</div>`;
+  container.appendChild(section);
+  section.querySelectorAll("[data-recommendation-action]").forEach((button) => {
+    button.addEventListener("click", () => handleInterestRecommendation(button));
+  });
+}
+
+async function openFeedbackSignals(mode, scrollPosition = captureScrollPosition()) {
+  const panel = document.getElementById(`feedback-${mode}-signals-panel`);
+  state.feedbackMode = mode;
+  showLoading(panel.id, "피드백한 소식을 불러오고 있어요.");
+  try {
+    const data = await api(`/api/v1/signals/feedback/${mode}`);
+    state.feedbackSignals = data.signals || [];
+    renderFeedbackSignals();
+  } catch (error) {
+    panel.innerHTML = emptyState("소식을 불러오지 못했어요.", "잠시 후 다시 시도해주세요.", "저장한 소식으로 돌아가기", "back-to-saved");
+    bindEmptyAction("back-to-saved", closeFeedbackSignals);
+  } finally {
+    restoreScrollPosition(scrollPosition);
+  }
+}
+
+function closeFeedbackSignals() {
+  state.feedbackMode = null;
+  setActiveTab("saved", { updateHash: true, load: true });
+}
+
+function renderFeedbackSignals() {
+  const panel = document.getElementById(`feedback-${state.feedbackMode}-signals-panel`);
+  const mode = state.feedbackMode;
+  panel.innerHTML = state.feedbackSignals.length ? `<div class="stack">${state.feedbackSignals.map((signal, index) => renderFeedbackSignalCard(signal, index + 1)).join("")}</div>` : emptyState("아직 설정한 소식이 없어요.", "오늘의 소식에서 피드백을 선택하면 이곳에서 다시 볼 수 있어요.", "저장한 소식으로 돌아가기", "back-to-saved");
+  panel.querySelectorAll("[data-open-url]").forEach((button) => button.addEventListener("click", () => window.open(button.dataset.openUrl, "_blank", "noopener,noreferrer")));
+  panel.querySelectorAll("[data-clear-feedback]").forEach((button) => button.addEventListener("click", () => clearFeedbackSignal(button.closest(".signal-card").dataset.signalId, button)));
+  panel.querySelector('[data-action="back-to-saved"]')?.addEventListener("click", closeFeedbackSignals);
+}
+
+function renderFeedbackSignalCard(signal, listRank) {
+  const title = signal.display_title_ko || signal.title || "피드백한 소식";
+  const summary = signal.headline_summary_ko || signal.display_summary_ko || signal.summary || "";
+  const url = signal.source_url || "";
+  const keywordOrigin = keywordOriginText(signal);
+  const source = signal.source_display || sourceLabel(signal.source_name || "미확인");
+  return `<article class="signal-card" data-signal-id="${signal.id}"><div class="signal-head"><div class="rank">${listRank}</div><div><h3 class="signal-title">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div><p class="signal-derived-from">${escapeHtml(keywordOrigin)}</p><div class="signal-meta"><span class="pill">출처 ${escapeHtml(source)}</span><span class="pill">설정한 날짜 ${escapeHtml(formatSavedDate(signal.feedback_at))}</span></div><div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button ghost" data-clear-feedback>설정 취소</button></div></article>`;
+}
+
+async function clearFeedbackSignal(signalId, button) {
+  const scrollPosition = captureScrollPosition();
+  setBusy(button, true, "취소 중");
+  try {
+    await api(`/api/v1/signals/${signalId}/feedback/${state.feedbackMode}`, { method: "DELETE" });
+    state.feedbackSignals = state.feedbackSignals.filter((signal) => String(signal.id) !== String(signalId));
+    renderFeedbackSignals();
+    restoreScrollPosition(scrollPosition);
+    showToast("피드백 설정을 취소했어요.");
+  } catch (error) {
+    showToast(error.message);
+    setBusy(button, false, "설정 취소");
+  }
+}
+
+function renderInterestRecommendation(recommendation) {
+  return `<article class="recommendation-card" data-keyword="${escapeHtml(recommendation.keyword)}"><div><strong>${escapeHtml(recommendation.keyword)}</strong><p>${escapeHtml(recommendation.reason)}</p></div><div class="recommendation-actions"><button class="button secondary" data-recommendation-action="add">추가</button><button class="button ghost" data-recommendation-action="dismiss">삭제</button></div></article>`;
+}
+
+async function handleInterestRecommendation(button) {
+  const card = button.closest(".recommendation-card");
+  const keyword = card.dataset.keyword;
+  const action = button.dataset.recommendationAction;
+  const original = button.textContent;
+  setBusy(button, true, action === "add" ? "추가 중" : "삭제 중");
+  try {
+    if (action === "add") await api("/api/v1/interests", { method: "POST", body: JSON.stringify({ keyword }) });
+    else await api(`/api/v1/interests/recommendations/${encodeURIComponent(keyword)}/dismiss`, { method: "POST" });
+    await loadInterests();
+    showToast(action === "add" ? "관심 키워드를 추가했어요." : "추천 키워드에서 삭제했어요.");
+  } catch (error) {
+    showToast(error.message);
+    setBusy(button, false, original);
+  }
 }
 
 function openInterestForm() {
@@ -492,25 +726,23 @@ async function addManualInterest(event) {
 
 function renderInterestCard(interest) {
   return `
-    <article class="card" data-keyword="${escapeHtml(interest.keyword)}">
+    <article class="card interest-card" data-keyword="${escapeHtml(interest.keyword)}" data-interest-status="${escapeHtml(interest.status)}">
       <div class="card-title"><h3>${escapeHtml(interest.keyword)}</h3>${interestStatusChip(interest.status)}</div>
-      <div class="pill-row">
-        <span class="pill">중요도 ${weightLabel(interest.weight)}</span>
-        <span class="pill">${sourceNameForInterest(interest.source)}</span>
-      </div>
-      <p>${escapeHtml(evidenceSentence(interest))}</p>
-      <div class="actions">
-        ${interest.status === "muted" ? `<button class="button secondary" data-interest-action="unmute">다시 사용</button>` : `<button class="button secondary" data-interest-action="mute">숨기기</button>`}
+      ${renderImportanceDots(interest.weight)}
+      <div class="interest-actions">
         <button class="button secondary" data-interest-action="up">중요도 올리기</button>
         <button class="button secondary" data-interest-action="down">중요도 낮추기</button>
+        ${interest.status === "muted" ? `<button class="button secondary" data-interest-action="unmute">다시 사용</button>` : `<button class="button secondary" data-interest-action="mute">숨기기</button>`}
         <button class="button danger" data-interest-action="delete">삭제</button>
       </div>
-      <details class="details">
-        <summary>이 관심사가 생긴 이유</summary>
-        <div class="details-content"><p>${escapeHtml(evidenceSentence(interest))}</p></div>
-      </details>
     </article>
   `;
+}
+
+function renderImportanceDots(weight) {
+  const level = Math.max(1, Math.min(5, Math.round(Number(weight) || 1)));
+  const dots = Array.from({ length: 5 }, (_, index) => `<span class="importance-dot${index < level ? " filled" : ""}" aria-hidden="true"></span>`).join("");
+  return `<div class="importance-dots" aria-label="중요도 ${level}단계, 5단계 중">${dots}</div>`;
 }
 
 function bindInterestActions(container) {
@@ -531,7 +763,7 @@ function bindInterestActions(container) {
           await api(`/api/v1/interests/${encodeURIComponent(keyword)}`, { method: "PUT", body: JSON.stringify({ weight: nextWeight }) });
         }
         showToast("관심사 설정을 반영했어요");
-        await loadInterests();
+        await Promise.all([loadInterests(), loadSignals(false)]);
       } catch (error) {
         showToast(error.message);
       } finally {
@@ -541,22 +773,7 @@ function bindInterestActions(container) {
   });
 }
 
-async function syncContext() {
-  const button = document.getElementById("sync-context");
-  const original = button.textContent;
-  setBusy(button, true, "동기화 중");
-  try {
-    await api("/api/v1/context/sync", { method: "POST", body: JSON.stringify({ limit: 100 }) });
-    showToast("개인 맥락 동기화를 마쳤어요");
-    await Promise.allSettled([loadInterests(), loadActivity()]);
-  } catch (error) {
-    showToast(error.message);
-  } finally {
-    setBusy(button, false, original);
-  }
-}
-
-async function loadSources() {
+async function loadSources(scrollPosition = captureScrollPosition()) {
   const container = document.getElementById("sources-list");
   showLoading("sources-list", "소스 설정을 확인하고 있어요.");
   try {
@@ -565,7 +782,7 @@ async function loadSources() {
     const sources = sourceOrder.map((id) => state.sources.find((source) => source.source_id === id)).filter(Boolean);
     const enabledCount = sources.filter((source) => source.current_enabled).length;
     const emptyBanner = !enabledCount
-      ? `<div class="empty-state"><h3>켜진 소스가 없어요.</h3><p>Hacker News, GitHub, RSS 중 하나를 켜면 소식을 만들 수 있어요.</p><button class="button primary" data-action="seed-sources">기본 소스 켜기</button></div>`
+      ? `<div class="empty-state"><h3>사용 중인 소스가 없어요.</h3><p>Hacker News, GitHub, RSS 중 하나를 사용하면 소식을 만들 수 있어요.</p><button class="button primary" data-action="seed-sources">기본 소스 사용하기</button></div>`
       : "";
     container.innerHTML = emptyBanner + sources.map(renderSourceCard).join("");
     bindSourceActions(container);
@@ -573,6 +790,8 @@ async function loadSources() {
   } catch (error) {
     container.innerHTML = emptyState("잠시 연결이 불안정해요.", "다시 시도해보세요.", "새로고침", "retry-sources");
     bindEmptyAction("retry-sources", loadSources);
+  } finally {
+    restoreScrollPosition(scrollPosition);
   }
 }
 
@@ -586,10 +805,11 @@ function renderSourceCard(source) {
       <div class="card-title"><h3>${escapeHtml(name)}</h3>${sourceStatusChip(status)}</div>
       <p>${escapeHtml(description)}</p>
       <label class="toggle-row">
-        <span>${source.current_enabled ? "켜져 있어요" : "꺼져 있어요"}</span>
+        <span>사용하기</span>
         <input type="checkbox" data-source-enabled ${source.current_enabled ? "checked" : ""} ${status === "준비 중" ? "disabled" : ""} />
       </label>
       ${source.source_id === "github" ? `<p>GitHub 토큰은 선택 사항이에요. GITHUB_TOKEN 환경변수를 설정하면 더 안정적으로 수집할 수 있어요.</p>` : ""}
+      ${source.source_id === "youtube" ? `<p>YouTube Data API 키를 연결하면 실제 영상을 수집해요. 서버의 YOUTUBE_API_KEY 환경변수에 키를 설정해주세요.</p>` : ""}
       ${isRssLike ? `<label class="form-group"><span>RSS feed URL</span><textarea data-feed-urls rows="4" placeholder="한 줄에 하나씩 입력하세요.">${escapeHtml((config.feed_urls || []).join("\n"))}</textarea></label>` : ""}
       <button class="button secondary" data-save-source ${status === "준비 중" ? "disabled" : ""}>저장</button>
     </article>
@@ -633,50 +853,41 @@ async function seedDefaultSources() {
   }
 }
 
-async function loadActivity() {
+async function loadActivity(scrollPosition = captureScrollPosition()) {
   const container = document.getElementById("activity-list");
   showLoading("activity-list", "활동 기록을 불러오고 있어요.");
   try {
-    const [pipelineData, syncData, feedbackData] = await Promise.all([
+    const [pipelineData, feedbackData] = await Promise.all([
       api("/api/v1/pipeline/runs?limit=12"),
-      api("/api/v1/context/sync-runs?limit=12"),
       api("/api/v1/feedback/events?limit=12"),
     ]);
     const items = [
       ...(pipelineData.runs || []).map(activityFromPipeline),
-      ...(syncData.runs || []).map(activityFromSync),
       ...(feedbackData.events || []).map(activityFromFeedback),
-    ].sort((a, b) => new Date(b.time) - new Date(a.time));
+    ].sort((a, b) => parseServerTimestamp(b.time) - parseServerTimestamp(a.time));
     if (!items.length) {
       container.innerHTML = `<div class="empty-state"><h3>아직 활동 기록이 없어요.</h3><p>오늘의 소식을 받으면 이곳에 기록이 남아요.</p></div>`;
       return;
     }
     container.innerHTML = items.slice(0, 18).map(renderActivityItem).join("");
+    container.querySelectorAll("[data-activity-source-url]").forEach((button) => {
+      button.addEventListener("click", () => {
+        window.open(button.dataset.activitySourceUrl, "_blank", "noopener,noreferrer");
+      });
+    });
   } catch (error) {
     container.innerHTML = emptyState("잠시 연결이 불안정해요.", "다시 시도해보세요.", "새로고침", "retry-activity");
     bindEmptyAction("retry-activity", loadActivity);
+  } finally {
+    restoreScrollPosition(scrollPosition);
   }
 }
 
 function activityFromPipeline(run) {
-  const summary = run.summary_json || {};
-  const hasWarnings = run.error_message || Object.keys(summary.errors_by_source || {}).length;
   return {
     time: run.completed_at || run.started_at,
     title: `${formatTime(run.completed_at || run.started_at)} 오늘의 소식을 만들었어요`,
     body: `총 ${run.source_item_count || 0}개 후보를 확인하고 소식 ${run.signal_count || 0}개를 골랐어요.`,
-    detail: hasWarnings ? "일부 소스에서 데이터를 가져오지 못했지만, 가능한 소스로 소식을 만들었어요." : "브리핑 생성이 정상적으로 끝났어요.",
-    raw: run,
-  };
-}
-
-function activityFromSync(run) {
-  return {
-    time: run.completed_at || run.started_at,
-    title: `${formatTime(run.completed_at || run.started_at)} 개인 맥락을 살펴봤어요`,
-    body: `${connectorLabel(run.connector_type)}에서 새 항목 ${run.item_count || 0}개와 관심사 ${run.keyword_count || 0}개를 찾았어요.`,
-    detail: run.error_message ? "일부 내용을 읽지 못했지만, 가능한 범위에서 반영했어요." : "동기화가 정상적으로 끝났어요.",
-    raw: run,
   };
 }
 
@@ -686,23 +897,19 @@ function activityFromFeedback(event) {
     time: event.created_at,
     title: `${formatTime(event.created_at)} ${messages[event.event_type] || "활동을 기록했어요"}`,
     body: event.signal_title ? `관련 소식: ${event.signal_title}` : "브리핑 사용 흐름을 반영했어요.",
-    detail: "이 기록은 다음 소식을 더 잘 고르는 데 사용돼요.",
-    raw: event,
+    sourceUrl: event.event_type === "opened" ? event.signal_url || "" : "",
   };
 }
 
 function renderActivityItem(item) {
+  const sourceButton = item.sourceUrl
+    ? `<div class="activity-actions"><button type="button" class="button primary" data-activity-source-url="${escapeHtml(item.sourceUrl)}">원문 보기</button></div>`
+    : "";
   return `
     <article class="activity-item">
       <div class="card-title"><h3>${escapeHtml(item.title)}</h3></div>
       <p>${escapeHtml(item.body)}</p>
-      <details class="details">
-        <summary>자세히 보기</summary>
-        <div class="details-content">
-          <p>${escapeHtml(item.detail)}</p>
-          <pre class="technical-box">${escapeHtml(JSON.stringify(item.raw, null, 2))}</pre>
-        </div>
-      </details>
+      ${sourceButton}
     </article>
   `;
 }
@@ -780,10 +987,8 @@ async function completeOnboarding(event) {
     });
     await api("/api/v1/settings", {
       method: "PUT",
-      body: JSON.stringify({ generate_mode: mode, sync_before_briefing: true, signal_count: signalCount, briefing_time: briefingTime }),
+      body: JSON.stringify({ generate_mode: mode, signal_count: signalCount, briefing_time: briefingTime }),
     });
-    await api("/api/v1/connectors/browser_history", { method: "PUT", body: JSON.stringify({ enabled: browserEnabled, config: {} }) });
-    await api("/api/v1/connectors/local_files", { method: "PUT", body: JSON.stringify({ enabled: localEnabled, config: { folders } }) });
     await api("/api/v1/sources/configs/seed-defaults", { method: "POST", body: JSON.stringify({ overwrite: false }) });
     await Promise.allSettled([loadProfile(), loadSettings(), loadConnectors(), loadInterests(false)]);
     closeOnboarding();
@@ -799,6 +1004,7 @@ async function completeOnboarding(event) {
 
 async function saveSettings(event) {
   event.preventDefault();
+  const scrollPosition = captureScrollPosition();
   const selectedMode = document.querySelector("input[name='generate-mode']:checked")?.value || "hybrid";
   const submit = event.submitter || event.currentTarget.querySelector("button[type='submit']");
   const original = submit.textContent;
@@ -810,17 +1016,7 @@ async function saveSettings(event) {
         signal_count: Number(document.getElementById("setting-signal-count").value),
         briefing_time: document.getElementById("setting-briefing-time").value || "08:00",
         mode_enabled: document.getElementById("setting-auto-briefing").checked,
-        sync_before_briefing: document.getElementById("setting-sync-before").checked,
-        context_sync_interval_minutes: Number(document.getElementById("setting-sync-interval").value),
         generate_mode: selectedMode,
-      }),
-    });
-    await api("/api/v1/connectors/browser_history", { method: "PUT", body: JSON.stringify({ enabled: document.getElementById("connector-browser").checked, config: {} }) });
-    await api("/api/v1/connectors/local_files", {
-      method: "PUT",
-      body: JSON.stringify({
-        enabled: document.getElementById("connector-local").checked,
-        config: { folders: document.getElementById("connector-local-folders").value.split("\n").map((line) => line.trim()).filter(Boolean) },
       }),
     });
     showToast("설정을 저장했어요");
@@ -829,6 +1025,7 @@ async function saveSettings(event) {
     showToast(error.message);
   } finally {
     setBusy(submit, false, original);
+    restoreScrollPosition(scrollPosition);
   }
 }
 
@@ -840,15 +1037,8 @@ function renderSettings() {
   renderSignalCountGateNote();
   setValue("setting-briefing-time", state.settings.briefing_time || "08:00");
   setChecked("setting-auto-briefing", state.settings.mode_enabled !== false);
-  setChecked("setting-sync-before", state.settings.sync_before_briefing !== false);
-  setValue("setting-sync-interval", state.settings.context_sync_interval_minutes || 360);
   const modeInput = document.querySelector(`input[name="generate-mode"][value="${state.settings.generate_mode || "hybrid"}"]`);
   if (modeInput) modeInput.checked = true;
-  const browser = state.connectors.find((item) => item.connector_type === "browser_history");
-  const local = state.connectors.find((item) => item.connector_type === "local_files");
-  setChecked("connector-browser", Boolean(browser?.enabled));
-  setChecked("connector-local", Boolean(local?.enabled));
-  setValue("connector-local-folders", (local?.config_json?.folders || []).join("\n"));
 }
 
 function initAuthShell() {
@@ -978,7 +1168,7 @@ function formatEntitlementSummary(entitlements = {}) {
 function formatDateTime(value) {
   if (!value) return "아직 없음";
   try {
-    return new Date(value).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" });
+    return parseServerTimestamp(value).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" });
   } catch (error) {
     return value;
   }
@@ -1056,6 +1246,42 @@ function bindEmptyAction(action, handler) {
   document.querySelectorAll(`[data-action="${action}"]`).forEach((button) => button.addEventListener("click", handler));
 }
 
+function scrollStorageKey() {
+  if (typeof location === "undefined") return "lumos:scroll-position";
+  return `lumos:scroll-position:${location.hash || "#today"}`;
+}
+
+function captureScrollPosition() {
+  if (typeof window === "undefined") return null;
+  return { x: window.scrollX || 0, y: window.scrollY || 0 };
+}
+
+function storeScrollPosition() {
+  const position = captureScrollPosition();
+  if (!position || typeof sessionStorage === "undefined") return;
+  sessionStorage.setItem(scrollStorageKey(), JSON.stringify(position));
+}
+
+function readStoredScrollPosition() {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    const position = JSON.parse(sessionStorage.getItem(scrollStorageKey()) || "null");
+    return Number.isFinite(position?.x) && Number.isFinite(position?.y) ? position : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function restoreScrollPosition(position) {
+  if (!position || typeof window === "undefined" || typeof window.scrollTo !== "function") return;
+  const restore = () => window.scrollTo(position.x, position.y);
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(restore));
+  } else {
+    setTimeout(restore, 0);
+  }
+}
+
 function showLoading(containerId, message) {
   const container = document.getElementById(containerId);
   if (container) container.innerHTML = `<div class="loading-card"><span class="spinner"></span>${escapeHtml(message)}</div>`;
@@ -1076,7 +1302,7 @@ function showToast(message) {
 }
 
 function statusPill(status) {
-  const labels = { saved: "저장됨", ignored: "줄이는 중", tracked: "추적 중", active: "사용 중", new: "새 소식" };
+  const labels = { saved: "저장됨", ignored: "관심 없음", tracked: "계속 추적 중", active: "사용 중", new: "새 소식" };
   return `<span class="status-chip subtle">${labels[status] || "사용 중"}</span>`;
 }
 
@@ -1087,22 +1313,31 @@ function interestStatusChip(status) {
 }
 
 function sourceStatusChip(status) {
-  const className = status === "준비됨" || status === "토큰 선택" ? "ready" : status === "꺼짐" ? "off" : "warning";
+  const className = status === "준비됨" || status === "토큰 선택" ? "ready" : status === "사용 안 함" ? "off" : "warning";
   return `<span class="status-chip ${className}">${status}</span>`;
 }
 
 function sourceStatus(source) {
   if (source.implemented_status !== "implemented") return "준비 중";
-  if (!source.current_enabled) return "꺼짐";
+  if (!source.current_enabled) return "사용 안 함";
   const config = source.config_json || {};
   if (["rss", "official_ai_blogs", "company_newsroom"].includes(source.source_id) && !(config.feed_urls || []).length) return "URL 필요";
+  if (source.source_id === "youtube" && !source.api_key_ready) return "API 키 필요";
   if (source.source_id === "github") return "토큰 선택";
   return "준비됨";
 }
 
 function recommendationReason(signal) {
-  if (signal.category) return `${humanCategory(signal.category)} 흐름과 내 관심 기준이 맞았어요.`;
-  return "최근 관심 흐름과 잘 맞는 소식예요.";
+  const topic = humanCategory(signal.category) || "관심 분야";
+  return `${topic} 분야에서 최근 어떤 변화가 나타나는지 확인할 수 있어, 실제 적용이나 시장 변화로 이어질지 판단하는 데 도움이 될 만해 추천했어요.`;
+}
+
+function keywordOriginText(signal) {
+  const keywords = signal.matched_keywords || signal.metadata_json?.matched_keywords || [];
+  const visibleKeywords = keywords.map((keyword) => String(keyword).trim()).filter(Boolean).slice(0, 3);
+  return visibleKeywords.length
+    ? `'${visibleKeywords.join(", ")}' 키워드에서 찾은 원문이에요.`
+    : "설정한 관심사에서 찾은 원문이에요.";
 }
 
 function weightLabel(weight) {
@@ -1138,14 +1373,29 @@ function connectorLabel(type) {
 
 function humanCategory(category) {
   const labels = { AI_LLM_AGENT: "AI와 에이전트", RESEARCH: "연구", STARTUP_PRODUCT: "스타트업과 제품", DEVELOPER_TECH: "개발자 도구", COMPANY_TRACKING: "기업 변화", CONTENT_SNS: "콘텐츠와 커뮤니티", CAREER: "커리어", DOMESTIC_INDUSTRY: "국내 산업" };
-  return labels[category] || "관심";
+  return labels[category] || "";
 }
 
 function formatTime(value) {
   if (!value) return "방금";
-  const date = new Date(String(value).replace(" ", "T"));
+  const date = parseServerTimestamp(value);
   if (Number.isNaN(date.getTime())) return "방금";
   return date.toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
+}
+
+function formatSavedDate(value) {
+  if (!value) return "날짜 미확인";
+  const date = parseServerTimestamp(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+  return date.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" });
+}
+
+function parseServerTimestamp(value) {
+  const normalized = String(value || "").trim().replace(" ", "T");
+  // SQLite CURRENT_TIMESTAMP is UTC but omits its timezone suffix. Preserve
+  // explicitly supplied offsets while marking bare database timestamps as UTC.
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+  return new Date(hasTimezone ? normalized : `${normalized}Z`);
 }
 
 function setValue(id, value) {

@@ -1,4 +1,4 @@
-"""Best-effort English -> Korean translation for article titles and summaries.
+"""Best-effort Korean/English translation for search terms, titles, and summaries.
 
 Uses the free MyMemory translation API (no key required). Network or quota
 failures degrade gracefully: callers get None back and fall back to the
@@ -28,29 +28,42 @@ def _apply_jargon_corrections(text: str) -> str:
         particle = match.group(1) or ""
         return "AI 에이전트" + _PARTICLE_AFTER_VOWEL.get(particle, particle)
 
-    return _AGENT_MISTRANSLATION.sub(_fix_agent, text)
+    text = _AGENT_MISTRANSLATION.sub(_fix_agent, text)
+    return re.sub(r"(?:진동|분위기)\s*코딩", "바이브 코딩", text)
 
 
-def translate_to_korean(text: str, timeout: float = 4.0) -> Optional[str]:
+def translate(text: str, source_language: str, target_language: str, timeout: float = 4.0) -> Optional[str]:
     text = (text or "").strip()
     if not text:
         return None
     text = text[:_MAX_CHARS]
-    if text in _cache:
-        return _cache[text]
+    cache_key = (text, source_language, target_language)
+    if cache_key in _cache:
+        return _cache[cache_key]
     try:
         response = httpx.get(
             _TRANSLATE_URL,
-            params={"q": text, "langpair": "en|ko"},
+            params={"q": text, "langpair": f"{source_language}|{target_language}"},
             timeout=timeout,
         )
         response.raise_for_status()
         data = response.json()
         translated = ((data.get("responseData") or {}).get("translatedText") or "").strip()
         if not translated or translated.lower() == text.lower():
+            _cache[cache_key] = None
             return None
-        translated = _apply_jargon_corrections(translated)
-        _cache[text] = translated
+        if target_language == "ko":
+            translated = _apply_jargon_corrections(translated)
+        _cache[cache_key] = translated
         return translated
     except Exception:
+        _cache[cache_key] = None
         return None
+
+
+def translate_to_korean(text: str, timeout: float = 4.0) -> Optional[str]:
+    return translate(text, "en", "ko", timeout)
+
+
+def translate_to_english(text: str, timeout: float = 4.0) -> Optional[str]:
+    return translate(text, "ko", "en", timeout)

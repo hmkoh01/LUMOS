@@ -12,12 +12,15 @@ from src.sources.query_planner import QueryPlanner
 from src.sources.collectors.base import SourceQuery
 from src.sources.collectors.hackernews import HackerNewsCollector
 from src.sources.collectors.rss import RSSCollector
+from src.signals.commercial_filter import commercial_page_reason, commercial_context_reason
+from src.signals.candidate import is_youtube_short
 from src.storage.sqlite_store import SQLiteStore
 
 
 class SignalRelevanceTest(unittest.TestCase):
     def test_bilingual_matching_and_word_boundaries(self):
         self.assertTrue(matches_interest("New marketing tools", "마케팅"))
+        self.assertFalse(matches_interest("Agricultural marketing for farmers", "마케팅"))
         self.assertTrue(matches_interest("A content-strategy guide", "콘텐츠 기획자"))
         self.assertTrue(matches_interest("마케팅을 위한 도구", "마케팅"))
         self.assertFalse(matches_interest("Retail said profits rose", "AI"))
@@ -52,6 +55,22 @@ class SignalRelevanceTest(unittest.TestCase):
         self.assertEqual(result.items, [])
         self.assertTrue(result.errors)
 
+    def test_search_shares_collection_limit_between_interest_queries(self):
+        def fetch(url, timeout):
+            query = parse_qs(urlsplit(url).query)["query"][0]
+            return {"hits": [
+                {"objectID": f"{query}-{index}", "title": f"{query} update {index}",
+                 "url": f"https://example.org/{query}/{index}", "created_at_i": int(time.time())}
+                for index in range(5)
+            ]}
+        queries = [
+            SourceQuery(source="hackernews", query="marketing", params={"search": True}),
+            SourceQuery(source="hackernews", query="security", params={"search": True}),
+        ]
+        result = HackerNewsCollector(fetch_json=fetch).collect(queries, 4)
+        self.assertEqual(len(result.items), 4)
+        self.assertEqual({item.raw_json["search_query"] for item in result.items}, {"marketing", "security"})
+
     def test_planner_uses_current_interests_in_both_languages(self):
         planner = QueryPlanner()
         keywords = planner._keywords({"role": "doctor", "interest_types_json": ["old topic"]}, [{"keyword": "콘텐츠 기획자"}, {"keyword": "마케팅"}])
@@ -59,6 +78,26 @@ class SignalRelevanceTest(unittest.TestCase):
         self.assertIn("marketing", [query["query"] for query in queries])
         self.assertNotIn("doctor", keywords)
         self.assertEqual(planner._keywords({}, []), [])
+
+    def test_planner_gives_each_interest_a_query_before_aliases(self):
+        queries = QueryPlanner()._queries_for_source(
+            "hackernews", ["marketing", "data analysis automation", "AI infrastructure"], "", [], ""
+        )
+        values = [entry["query"] for entry in queries]
+        self.assertEqual(values[:3], ["marketing", "data analysis automation", "ai infrastructure"])
+
+    def test_youtube_uses_intent_phrase_instead_of_a_bare_translation(self):
+        queries = QueryPlanner()._queries_for_source("youtube", ["마케팅"], "", [], "CONTENT_SNS")
+        self.assertEqual([entry["query"] for entry in queries], ["마케팅 전략", "digital marketing strategy"])
+        self.assertEqual([entry["params"]["language"] for entry in queries], ["ko", "en"])
+        self.assertIn("farmer", queries[0]["params"]["semantic_excludes"])
+
+    def test_rss_keeps_korean_and_english_interest_terms_for_configured_feeds(self):
+        queries = QueryPlanner()._queries_for_source(
+            "rss", ["마케팅"], "", [], "CONTENT_SNS", {"feed_urls": ["https://example.org/feed"]}
+        )
+        self.assertIn("마케팅", queries[0]["params"]["keywords"])
+        self.assertIn("marketing", queries[0]["params"]["keywords"])
 
     def test_unrelated_popular_items_do_not_fill_collector_results(self):
         def fetch(url, timeout):
@@ -90,6 +129,58 @@ class SignalRelevanceTest(unittest.TestCase):
             self.assertEqual(len(signals), 2)
             self.assertEqual(len({signal["source_url"] for signal in signals}), 2)
             self.assertEqual(CandidateBuilder(store).create_from_source_items(rows, []), [])
+
+    def test_generation_fills_requested_count_after_interest_diversity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteStore(Path(directory) / "test.db")
+            store.update_settings({"signal_count": 3})
+            store.upsert_interest("마케팅", "test", 1, "manual", {})
+            store.upsert_interest("AI", "test", 1, "manual", {})
+            candidates = [
+                {"title": f"Marketing analysis {index}", "summary": "", "source": "mock",
+                 "source_item_id": str(index), "url": f"https://example.com/{index}",
+                 "matched_keywords_json": ["마케팅"], "raw_json": {"mock": True}}
+                for index in range(3)
+            ]
+            signals = SignalGenerator(store).generate_from_candidates(candidates)
+            self.assertEqual(len(signals), 3)
+
+    def test_commercial_subscription_pages_are_excluded_but_product_news_is_kept(self):
+        subscription = {
+            "source": "rss", "url": "https://ai.example.com/pricing", "title": "AI service pricing plans",
+            "summary": "Start free trial and choose your plan today.",
+        }
+        product_news = {
+            "source": "rss", "url": "https://news.example.com/ai-service-launch", "title": "AI service launches new plan",
+            "summary": "The company announced a new subscription option for teams.",
+        }
+        self.assertEqual(commercial_page_reason(subscription), "commercial_url")
+        self.assertEqual(commercial_page_reason(product_news), "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteStore(Path(directory) / "test.db")
+            store.upsert_interest("AI", "test", 1, "manual", {})
+            rows = []
+            for index, item in enumerate((subscription, product_news)):
+                item_id = store.upsert_source_item({**item, "source_item_id": str(index)})
+                rows.append(store.get_source_item(item_id))
+            candidates = CandidateBuilder(store).create_from_source_items(rows, store.get_interests())
+            self.assertEqual([candidate["title"] for candidate in candidates], [product_news["title"]])
+
+    def test_commercial_landing_content_is_excluded_after_fetch(self):
+        item = {"source": "rss", "url": "https://arda.example", "title": "Arda marketing agents", "summary": ""}
+        context = {"status": "available", "title": "Arda", "description": "Simple, transparent pricing for marketing agents.",
+                   "text": "Starter is $99/month. Enterprise plans include annual billing. Book a call to get started."}
+        self.assertEqual(commercial_context_reason(item, context), "commercial_page_content")
+
+    def test_show_hn_external_homepage_is_not_treated_as_an_article(self):
+        item = {"source": "hackernews", "url": "https://spendict.example/",
+                "title": "Show HN: Spendict – a performance marketer's verdict for AI agents"}
+        self.assertEqual(commercial_page_reason(item), "commercial_show_hn_landing")
+
+    def test_youtube_shorts_link_from_another_source_is_excluded(self):
+        self.assertTrue(is_youtube_short({"source": "hackernews", "url": "https://www.youtube.com/shorts/skV0hDd-chM"}))
+        self.assertFalse(is_youtube_short({"source": "hackernews", "url": "https://www.youtube.com/watch?v=skV0hDd-chM"}))
 
 
 if __name__ == "__main__":

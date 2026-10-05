@@ -70,7 +70,6 @@ def seed_demo_db(generate_signals: bool = True) -> Dict[str, object]:
             "signal_count": 3,
             "briefing_time": "08:00",
             "generate_mode": "mock",
-            "sync_before_briefing": False,
             "enabled_sources_json": DEMO_ENABLED_SOURCES,
             "enabled_connectors_json": {"browser_history": False, "local_files": False},
             "onboarding_completed": True,

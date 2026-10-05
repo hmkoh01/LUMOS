@@ -48,4 +48,3 @@ dist/LUMOS/
 - Landing pages are bundled from `src/web/landing`.
 - Beta package documents are bundled from `packaging/windows/beta_package`.
 - Runtime data is expected under the executable folder's `data/` directory for the portable prototype.
-- Tcl/Tk resources are manually included for the tkinter Companion window.

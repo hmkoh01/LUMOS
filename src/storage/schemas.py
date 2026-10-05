@@ -99,7 +99,7 @@ DEFAULT_SOURCE_CONFIGS = {
         "enabled": False,
         "display_name": "YouTube",
         "priority": 38,
-        "config_json": {"keywords": ["creator", "video trend"], "collector": "placeholder"},
+        "config_json": {"keywords": ["creator", "video trend"], "language": "ko", "region": "KR", "collector": "youtube"},
     },
     "naver_news": {
         "enabled": False,

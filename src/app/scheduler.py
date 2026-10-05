@@ -1,9 +1,8 @@
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Callable, Optional
 
-from src.context.sync import sync_enabled_connectors
 from src.delivery.briefing_service import BriefingService
 from src.delivery.desktop_notification import notify_signals_ready
 from src.storage.sqlite_store import SQLiteStore
@@ -25,7 +24,6 @@ class DailyBriefingScheduler:
         self.on_ready = on_ready
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self._last_context_sync_at: Optional[datetime] = None
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -42,21 +40,9 @@ class DailyBriefingScheduler:
     def run_once(self, force: bool = False, show_notification: bool = False):
         return self.check_and_run_once(force=force, show_notification=show_notification)
 
-    def sync_once(self, force: bool = False):
-        settings = self.store.get_sync_settings()
-        if not force and self._last_context_sync_at:
-            interval = timedelta(minutes=settings["context_sync_interval_minutes"])
-            if datetime.utcnow() - self._last_context_sync_at < interval:
-                return {"ran": False, "reason": "before_sync_interval"}
-        result = sync_enabled_connectors(self.store, limit=100)
-        self._last_context_sync_at = datetime.utcnow()
-        self.store.prune_interests(settings["max_interest_keywords"])
-        return {"ran": True, "reason": "synced", "result": result}
-
     def tick(self, force: bool = False, show_notification: bool = False):
-        sync_result = self.sync_once(force=force)
         briefing_result = self.check_and_run_once(force=force, show_notification=show_notification)
-        return {"sync": sync_result, "briefing": briefing_result}
+        return {"briefing": briefing_result}
 
     def check_and_run_once(self, force: bool = False, show_notification: bool = False):
         today = date.today().isoformat()
@@ -68,9 +54,6 @@ class DailyBriefingScheduler:
             return {"ran": False, "reason": "before_briefing_time", "signals": self.store.get_today_active_signals()}
 
         selected_mode = settings.get("generate_mode") or self.mode
-        sync_result = None
-        if settings.get("sync_before_briefing"):
-            sync_result = self.sync_once(force=True)
         result = BriefingService(self.store).ensure_today_signals(
             mode=selected_mode,
             replace_today=True,
@@ -82,7 +65,7 @@ class DailyBriefingScheduler:
             self.notifier(len(signals))
         if self.on_ready:
             self.on_ready({"signals": signals, **result})
-        return {"ran": True, "reason": "generated", "context_sync": sync_result, **result}
+        return {"ran": True, "reason": "generated", **result}
 
     def _loop(self):
         while not self._stop_event.is_set():

@@ -2,7 +2,6 @@ from typing import Any, Dict, List, Optional
 
 from src.signals.pipeline import SignalPipeline
 from src.signals.feedback import FeedbackService
-from src.context.sync import sync_enabled_connectors
 from src.storage.sqlite_store import SQLiteStore
 
 
@@ -101,9 +100,6 @@ class BriefingService:
 
     def update_connector(self, connector_type: str, enabled: bool, config: Optional[Dict[str, Any]] = None):
         return self.store.update_connector(connector_type, enabled, config)
-
-    def sync_context(self, connector_types: Optional[List[str]] = None, limit: int = 100):
-        return sync_enabled_connectors(self.store, connector_types=connector_types, limit=limit)
 
     def get_interests(self, limit: int = 20, include_muted: bool = False):
         return self.store.get_interests(limit=limit, include_muted=include_muted)

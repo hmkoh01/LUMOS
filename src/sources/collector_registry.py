@@ -5,14 +5,14 @@ from src.sources.collectors.github import GitHubCollector
 from src.sources.collectors.hackernews import HackerNewsCollector
 from src.sources.collectors.mock import MockCollector
 from src.sources.collectors.rss import RSSCollector
+from src.sources.collectors.youtube import YouTubeCollector
 
 
 RSS_BACKED_SOURCES = {"rss", "official_ai_blogs", "company_newsroom"}
-IMPLEMENTED_SOURCES = {"mock", "hackernews", "github", *RSS_BACKED_SOURCES}
+IMPLEMENTED_SOURCES = {"mock", "hackernews", "github", "youtube", *RSS_BACKED_SOURCES}
 PLACEHOLDER_SOURCES = {
     "producthunt",
     "reddit",
-    "youtube",
     "naver_news",
     "arxiv",
 }
@@ -36,6 +36,8 @@ class CollectorRegistry:
             return HackerNewsCollector()
         if source_id == "github":
             return GitHubCollector()
+        if source_id == "youtube":
+            return YouTubeCollector()
         if mode == "hybrid":
             return MockCollector()
         return NoOpCollector(source_id)

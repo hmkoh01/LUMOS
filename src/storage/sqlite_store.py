@@ -45,6 +45,7 @@ class SQLiteStore:
             for statement in deferred_statements:
                 conn.execute(statement)
             self._ensure_defaults(conn)
+            self._remove_automatically_created_interests(conn)
             conn.commit()
 
     def _apply_column_migrations(self, conn: sqlite3.Connection):
@@ -78,6 +79,11 @@ class SQLiteStore:
                 (connector_type, 1 if enabled else 0),
             )
         self._seed_default_source_configs(conn, overwrite=False)
+
+    def _remove_automatically_created_interests(self, conn: sqlite3.Connection):
+        """Keep the interest graph limited to terms the user explicitly chose."""
+        conn.execute("DELETE FROM interest_graph WHERE source IN ('feedback', 'browser_history', 'local_files')")
+        conn.execute("UPDATE user_settings SET auto_expand_interests = 0 WHERE id = 1")
 
     def _seed_default_source_configs(self, conn: sqlite3.Connection, overwrite: bool = False):
         for source_id, config in DEFAULT_SOURCE_CONFIGS.items():
@@ -136,11 +142,11 @@ class SQLiteStore:
             self._ensure_defaults(conn)
             row = conn.execute("SELECT * FROM user_settings WHERE id = 1").fetchone()
             result = dict(row)
+            result.pop("auto_expand_interests", None)
             result["enabled_sources_json"] = self.loads(result["enabled_sources_json"], DEFAULT_SOURCES)
             result["enabled_connectors_json"] = self.loads(result["enabled_connectors_json"], DEFAULT_CONNECTORS)
             result["desktop_push_enabled"] = bool(result["desktop_push_enabled"])
             result["sync_before_briefing"] = bool(result.get("sync_before_briefing", 1))
-            result["auto_expand_interests"] = bool(result.get("auto_expand_interests", 0))
             result["mode_enabled"] = bool(result["mode_enabled"])
             result["onboarding_completed"] = bool(result["onboarding_completed"])
             return result
@@ -155,7 +161,6 @@ class SQLiteStore:
             "desktop_push_enabled",
             "generate_mode",
             "sync_before_briefing",
-            "auto_expand_interests",
             "context_sync_interval_minutes",
             "max_interest_keywords",
             "mode_enabled",
@@ -176,7 +181,7 @@ class SQLiteStore:
                 value = value if value in {"mock", "hybrid", "live"} else "mock"
             elif key in {"enabled_sources_json", "enabled_connectors_json"}:
                 value = self.dumps(value)
-            elif key in {"desktop_push_enabled", "sync_before_briefing", "auto_expand_interests", "mode_enabled", "onboarding_completed"}:
+            elif key in {"desktop_push_enabled", "sync_before_briefing", "mode_enabled", "onboarding_completed"}:
                 value = 1 if bool(value) else 0
             assignments.append(f"{key} = ?")
             params.append(value)
@@ -525,7 +530,8 @@ class SQLiteStore:
                 f"""
                 SELECT * FROM interest_graph
                 {where}
-                ORDER BY weight DESC, last_seen_at DESC
+                ORDER BY CASE WHEN status = 'muted' THEN 1 ELSE 0 END,
+                         id ASC
                 {limit_clause}
                 """,
                 params,
@@ -538,13 +544,17 @@ class SQLiteStore:
             return result
 
     def get_top_interests(self, limit: int = 20) -> List[Dict[str, Any]]:
-        return self.get_interests(status="active", limit=limit)
+        interests = self.get_interests(status="active", limit=None)
+        return sorted(interests, key=lambda item: (-float(item.get("weight") or 0), item["id"]))[:limit]
 
     def get_interest_evidence(self, keyword: str) -> List[Dict[str, Any]]:
         return [item for item in self.get_interests(limit=None, include_muted=True) if item["keyword"] == keyword]
 
     def prune_interests(self, max_keywords: int) -> Dict[str, Any]:
-        active = self.get_interests(status="active", limit=None)
+        active = sorted(
+            self.get_interests(status="active", limit=None),
+            key=lambda item: (-float(item.get("weight") or 0), item["id"]),
+        )
         if len(active) <= max_keywords:
             return {"muted": [], "kept": len(active)}
         overflow = active[max_keywords:]
@@ -558,71 +568,6 @@ class SQLiteStore:
             self.mute_interest(item["keyword"])
             muted.append(item["keyword"])
         return {"muted": muted, "kept": max_keywords}
-
-    def get_sync_settings(self) -> Dict[str, Any]:
-        settings = self.get_settings()
-        return {
-            "sync_before_briefing": settings.get("sync_before_briefing", True),
-            "context_sync_interval_minutes": int(settings.get("context_sync_interval_minutes", 360)),
-            "max_interest_keywords": int(settings.get("max_interest_keywords", 50)),
-        }
-
-    def update_sync_settings(self, updates: Dict[str, Any]) -> Dict[str, Any]:
-        allowed = {"sync_before_briefing", "context_sync_interval_minutes", "max_interest_keywords"}
-        return self.update_settings({key: value for key, value in updates.items() if key in allowed})
-
-    def create_context_sync_run(self, connector_type: str) -> int:
-        with self.connect() as conn:
-            cursor = conn.execute(
-                "INSERT INTO context_sync_runs (connector_type, status) VALUES (?, 'running')",
-                (connector_type,),
-            )
-            conn.commit()
-            return int(cursor.lastrowid)
-
-    def complete_context_sync_run(self, run_id: int, item_count: int, keyword_count: int, summary: Dict[str, Any]):
-        with self.connect() as conn:
-            conn.execute(
-                """
-                UPDATE context_sync_runs
-                SET status = 'completed',
-                    completed_at = CURRENT_TIMESTAMP,
-                    item_count = ?,
-                    keyword_count = ?,
-                    summary_json = ?
-                WHERE id = ?
-                """,
-                (int(item_count), int(keyword_count), self.dumps(summary), run_id),
-            )
-            conn.commit()
-
-    def fail_context_sync_run(self, run_id: int, error_message: str, summary: Optional[Dict[str, Any]] = None):
-        with self.connect() as conn:
-            conn.execute(
-                """
-                UPDATE context_sync_runs
-                SET status = 'failed',
-                    completed_at = CURRENT_TIMESTAMP,
-                    summary_json = ?,
-                    error_message = ?
-                WHERE id = ?
-                """,
-                (self.dumps(summary or {}), error_message, run_id),
-            )
-            conn.commit()
-
-    def get_recent_context_sync_runs(self, limit: int = 20) -> List[Dict[str, Any]]:
-        with self.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM context_sync_runs ORDER BY started_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-            result = []
-            for row in rows:
-                item = dict(row)
-                item["summary_json"] = self.loads(item["summary_json"], {})
-                result.append(item)
-            return result
 
     def build_context_item_dedupe_key(self, item: Dict[str, Any]) -> str:
         connector_type = self._normalize_text(item.get("connector_type", ""))
@@ -865,36 +810,98 @@ class SQLiteStore:
         return " ".join(str(value or "").strip().lower().split())
 
     def create_signal(self, signal: Dict[str, Any], pipeline_run_id: Optional[int] = None) -> int:
+        with self.connect() as conn:
+            signal_id = self._insert_signal(conn, signal, pipeline_run_id)
+            conn.commit()
+            return signal_id
+
+    def _insert_signal(self, conn, signal, pipeline_run_id=None):
         signal_date = signal.get("signal_date") or date.today().isoformat()
         dedupe_key = signal.get("dedupe_key") or self.build_signal_dedupe_key(signal)
+        cursor = conn.execute(
+            """
+            INSERT INTO signals
+            (pipeline_run_id, dedupe_key, signal_date, title, summary, why_it_matters, category, recommended_action,
+             source_name, source_url, source_items_json, metadata_json, confidence, rank, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pipeline_run_id if pipeline_run_id is not None else signal.get("pipeline_run_id"),
+                dedupe_key,
+                signal_date,
+                signal["title"],
+                signal["summary"],
+                signal["why_it_matters"],
+                signal.get("category", ""),
+                signal.get("recommended_action", ""),
+                signal.get("source_name", "Mock Source"),
+                signal.get("source_url", ""),
+                self.dumps(signal.get("source_items_json", [])),
+                self.dumps(signal.get("metadata_json", {})),
+                float(signal.get("confidence", 0.0)),
+                int(signal.get("rank", 1)),
+                signal.get("status", "new"),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def save_signal_reserves(self, run_id, candidates, base_count):
+        # Snapshot the ranked result: later collections can update candidate/source rows.
         with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO signals
-                (pipeline_run_id, dedupe_key, signal_date, title, summary, why_it_matters, category, recommended_action,
-                 source_name, source_url, source_items_json, metadata_json, confidence, rank, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    pipeline_run_id if pipeline_run_id is not None else signal.get("pipeline_run_id"),
-                    dedupe_key,
-                    signal_date,
-                    signal["title"],
-                    signal["summary"],
-                    signal["why_it_matters"],
-                    signal.get("category", ""),
-                    signal.get("recommended_action", ""),
-                    signal.get("source_name", "Mock Source"),
-                    signal.get("source_url", ""),
-                    self.dumps(signal.get("source_items_json", [])),
-                    self.dumps(signal.get("metadata_json", {})),
-                    float(signal.get("confidence", 0.0)),
-                    int(signal.get("rank", 1)),
-                    signal.get("status", "new"),
-                ),
+            conn.executemany(
+                "INSERT INTO signal_reserves (pipeline_run_id, rank, candidate_json) VALUES (?, ?, ?)",
+                [(run_id, rank, self.dumps(candidate))
+                 for rank, candidate in enumerate(candidates, start=base_count + 1)],
             )
+
+    def signal_expansion_status(self):
+        with self.connect() as conn:
+            return self._expansion_status(conn)
+
+    def _expansion_status(self, conn):
+        row = conn.execute(
+            "SELECT MAX(pipeline_run_id) AS run_id FROM signals WHERE signal_date = ? AND status != 'archived'",
+            (date.today().isoformat(),),
+        ).fetchone()
+        run_id = row["run_id"]
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM signal_reserves WHERE pipeline_run_id = ? AND signal_id IS NULL", (run_id,),
+        ).fetchone()[0]
+        return {"pipeline_run_id": run_id, "has_more": remaining > 0}
+
+    def get_signal_reserves(self, run_id, limit=3):
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT rank, candidate_json FROM signal_reserves WHERE pipeline_run_id = ? "
+                "AND signal_id IS NULL ORDER BY rank LIMIT ?", (run_id, limit),
+            ).fetchall()
+        return [(row["rank"], self.loads(row["candidate_json"], {})) for row in rows]
+
+    def reveal_signals(self, run_id, prepared):
+        from src.signals.identity import article_key
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if self._expansion_status(conn)["pipeline_run_id"] != run_id:
+                raise ValueError("브리핑이 바뀌었어요. 새로고침 후 다시 시도해주세요.")
+            shown = conn.execute(
+                "SELECT id, source_url FROM signals WHERE signal_date = ? AND status != 'archived'",
+                (date.today().isoformat(),),
+            ).fetchall()
+            identities = {article_key(dict(row)): row["id"] for row in shown}
+            for rank, signal in prepared:
+                reserve = conn.execute(
+                    "SELECT signal_id FROM signal_reserves WHERE pipeline_run_id = ? AND rank = ?", (run_id, rank),
+                ).fetchone()
+                if not reserve or reserve["signal_id"] is not None:
+                    continue
+                identity = article_key(signal)
+                signal_id = identities.get(identity)
+                if signal_id is None:
+                    signal_id = self._insert_signal(conn, signal, run_id)
+                    identities[identity] = signal_id
+                conn.execute("UPDATE signal_reserves SET signal_id = ? WHERE pipeline_run_id = ? AND rank = ?",
+                             (signal_id, run_id, rank))
             conn.commit()
-            return int(cursor.lastrowid)
 
     def create_source_route(self, route: Dict[str, Any], pipeline_run_id: Optional[int] = None) -> int:
         with self.connect() as conn:
@@ -1140,7 +1147,7 @@ class SQLiteStore:
                 SET status = 'archived',
                     archived_reason = ?
                 WHERE signal_date = ?
-                  AND status != 'archived'
+                  AND status NOT IN ('archived', 'saved')
                 """,
                 (reason, signal_date),
             )
@@ -1159,17 +1166,95 @@ class SQLiteStore:
             row = conn.execute("SELECT * FROM signals WHERE id = ?", (signal_id,)).fetchone()
             return self._signal_from_row(row) if row else None
 
-    def get_today_signals(self) -> List[Dict[str, Any]]:
+    def get_saved_signals(self, limit: int = 100) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT signals.*, MAX(feedback_events.created_at) AS saved_at
+                FROM signals
+                LEFT JOIN feedback_events
+                  ON feedback_events.signal_id = signals.id AND feedback_events.event_type = 'saved'
+                WHERE signals.status = 'saved'
+                GROUP BY signals.id
+                ORDER BY saved_at DESC, signals.created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [self._signal_from_row(row) for row in rows]
+
+    def delete_saved_signal(self, signal_id: int) -> bool:
+        with self.connect() as conn:
+            cursor = conn.execute("DELETE FROM signals WHERE id = ? AND status = 'saved'", (signal_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_feedback_signals(self, event_type: str, limit: int = 100) -> List[Dict[str, Any]]:
+        if event_type not in {"ignored", "tracked"}:
+            return []
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT s.*, e.created_at AS feedback_at
+                FROM feedback_events e
+                JOIN signals s ON s.id = e.signal_id
+                WHERE e.event_type = ?
+                  AND e.id = (
+                    SELECT latest.id FROM feedback_events latest
+                    WHERE latest.signal_id = e.signal_id
+                      AND latest.event_type IN ('ignored', 'tracked')
+                    ORDER BY latest.id DESC LIMIT 1
+                  )
+                ORDER BY feedback_at DESC
+                LIMIT ?
+                """,
+                (event_type, limit),
+            ).fetchall()
+            return [self._signal_from_row(row) for row in rows]
+
+    def clear_feedback_signal(self, signal_id: int, event_type: str) -> bool:
+        if event_type not in {"ignored", "tracked"}:
+            return False
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM feedback_events WHERE signal_id = ? AND event_type = ?",
+                (signal_id, event_type),
+            )
+            if cursor.rowcount:
+                row = conn.execute("SELECT status, signal_date FROM signals WHERE id = ?", (signal_id,)).fetchone()
+                if row and row["status"] == event_type:
+                    next_status = "active" if row["signal_date"] == date.today().isoformat() else "archived"
+                    conn.execute("UPDATE signals SET status = ? WHERE id = ?", (next_status, signal_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def has_feedback_signal(self, signal_id: int, event_type: str) -> bool:
+        if event_type not in {"ignored", "tracked"}:
+            return False
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM feedback_events WHERE signal_id = ? AND event_type = ? LIMIT 1",
+                (signal_id, event_type),
+            ).fetchone()
+            return bool(row)
+
+    def get_today_signals(self, include_archived: bool = True) -> List[Dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM signals
                 WHERE signal_date = ?
+                  AND (? OR status != 'archived')
                 ORDER BY rank ASC, created_at DESC
                 """,
-                (date.today().isoformat(),),
+                (date.today().isoformat(), include_archived),
             ).fetchall()
-            return [self._signal_from_row(row) for row in rows]
+        signals = self._dedupe_signal_articles(rows)
+        # A daily briefing is a snapshot.  Do not re-evaluate it against the
+        # current interest graph when it is loaded again: feedback and interest
+        # changes affect future recommendations, but must not make an already
+        # shown card disappear from today's list.
+        return signals if include_archived else [signal for signal in signals if signal.get("status") != "archived"]
 
     def get_today_active_signals(self) -> List[Dict[str, Any]]:
         with self.connect() as conn:
@@ -1182,15 +1267,47 @@ class SQLiteStore:
                 """,
                 (date.today().isoformat(),),
             ).fetchall()
-            return [self._signal_from_row(row) for row in rows]
+        active = [signal for signal in self._dedupe_signal_articles(rows) if signal.get("status") != "archived"]
+        return self._filter_signals_by_active_interests(active)
+
+    def _dedupe_signal_articles(self, rows) -> List[Dict[str, Any]]:
+        from src.signals.identity import article_key
+
+        signals = []
+        seen = set()
+        for row in rows:
+            signal = self._signal_from_row(row)
+            identity = article_key({**signal, "source": signal.get("source_name", "")})
+            if identity in seen:
+                continue
+            seen.add(identity)
+            signals.append(signal)
+        return signals
+
+    def _filter_signals_by_active_interests(self, signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        active_keywords = {
+            str(interest.get("keyword", "")).strip().casefold()
+            for interest in self.get_interests(status="active", limit=None)
+            if str(interest.get("keyword", "")).strip()
+        }
+        visible = []
+        for signal in signals:
+            matched = [str(keyword).strip().casefold() for keyword in signal.get("matched_keywords", []) if str(keyword).strip()]
+            if matched and not any(keyword in active_keywords for keyword in matched):
+                continue
+            visible.append(signal)
+        return visible
 
     def _signal_from_row(self, row: sqlite3.Row) -> Dict[str, Any]:
         item = dict(row)
         item["source_items_json"] = self.loads(item["source_items_json"], [])
         item["metadata_json"] = self.loads(item.get("metadata_json"), {})
-        if item["metadata_json"].get("briefing_version", 0) < 4:
+        if item["metadata_json"].get("briefing_version", 0) < 9:
             from src.signals.korean_briefing import build_korean_briefing
-            matched = []
+            from src.signals.provenance import source_metadata
+            from src.sources.article_content import article_context
+            from src.signals.commercial_filter import commercial_context_reason
+            matched = list(item["metadata_json"].get("matched_keywords", []))
             with self.connect() as conn:
                 candidates = conn.execute(
                     "SELECT matched_keywords_json FROM signal_candidates WHERE pipeline_run_id = ? AND source_item_id IN (SELECT id FROM source_items WHERE url = ?)",
@@ -1198,22 +1315,45 @@ class SQLiteStore:
                 ).fetchall()
             for candidate in candidates:
                 matched.extend(self.loads(candidate["matched_keywords_json"], []))
+            provenance_item = dict(item)
+            with self.connect() as conn:
+                original = conn.execute("SELECT * FROM source_items WHERE url = ? ORDER BY id DESC LIMIT 1",
+                                        (item.get("source_url"),)).fetchone()
+            if original:
+                provenance_item = self._source_item_from_row(original)
+                if provenance_item.get("pipeline_run_id") != item.get("pipeline_run_id"):
+                    # A later collection can overwrite this row; don't assign its mode to old signals.
+                    provenance_item["raw_json"] = {key: value for key, value in provenance_item["raw_json"].items()
+                                                   if key not in {"mock", "data_kind", "generation_mode"}}
+            # Version 8 fixes title selection. Re-read the public page instead
+            # of retaining a previously cached author/section heading as title.
+            context = article_context(
+                provenance_item, allow_fetch=item.get("status") != "archived" and bool(original))
+            provenance_item["raw_json"] = {**provenance_item.get("raw_json", {}), "article_context": context}
+            exclusion_reason = commercial_context_reason(provenance_item, context)
             item["metadata_json"].update(build_korean_briefing(
                 title=item.get("title", ""), summary=item.get("summary", ""),
                 source=item.get("source_name", ""), category=item.get("category", ""),
-                matched_keywords=list(dict.fromkeys(matched)),
+                matched_keywords=list(dict.fromkeys(matched)), content_context=context,
             ))
+            item["metadata_json"].update(source_metadata(provenance_item))
+            if exclusion_reason:
+                item["metadata_json"]["exclusion_reason"] = exclusion_reason
+                item["status"] = "archived"
+            for source_item in item["source_items_json"]:
+                source_item.update(source_metadata(source_item))
             # Persist the rebuild so translation (network-bound) only runs once per row,
             # not on every subsequent read of this signal.
             with self.connect() as conn:
                 conn.execute(
-                    "UPDATE signals SET metadata_json = ? WHERE id = ?",
-                    (self.dumps(item["metadata_json"]), item["id"]),
+                    "UPDATE signals SET metadata_json = ?, source_items_json = ?, status = ? WHERE id = ?",
+                    (self.dumps(item["metadata_json"]), self.dumps(item["source_items_json"]), item["status"], item["id"]),
                 )
                 conn.commit()
         item["matched_keywords"] = item["metadata_json"].get("matched_keywords", [])
         for key in {
             "display_title_ko",
+            "headline_summary_ko",
             "display_summary_ko",
             "why_it_matters_ko",
             "recommendation_reason_ko",
@@ -1222,6 +1362,13 @@ class SQLiteStore:
             "original_title",
             "original_snippet",
             "original_language",
+            "detail_summary_ko",
+            "detail_limitation_ko",
+            "source_display",
+            "collected_via",
+            "data_kind",
+            "generation_mode",
+            "article_title",
         }:
             item[key] = item["metadata_json"].get(key)
         return item
@@ -1246,7 +1393,8 @@ class SQLiteStore:
                 """
                 SELECT
                     e.*,
-                    s.title AS signal_title
+                    s.title AS signal_title,
+                    s.source_url AS signal_url
                 FROM feedback_events e
                 LEFT JOIN signals s ON s.id = e.signal_id
                 ORDER BY e.created_at DESC

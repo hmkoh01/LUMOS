@@ -17,16 +17,14 @@ from src.app.portable_entry import main as portable_main
 from src.app.resource_paths import data_dir, web_landing_dir, web_static_dir
 from src.app.version import APP_NAME, APP_VERSION, BUILD_STAGE
 from src.app.main import app
-from run import run_cloud, run_companion, run_demo_companion, run_demo_reset, run_demo_seed, run_demo_web_app, run_web_app
+from run import run_cloud, run_demo_reset, run_demo_seed, run_demo_web_app, run_web_app
 from src.cloud.app import app as cloud_app
 from src.cloud.config import CLOUD_DB_PATH
 from src.cloud.database import initialize_cloud_db
 from src.app.demo_seed import demo_db_path
-from src.app.server_control import is_server_running
 from src.delivery.briefing_service import BriefingService
 from src.desktop.app import main as desktop_main
 from src.desktop.briefing_window import BriefingWindow
-from src.desktop.companion_window import CompanionWindow, web_tab_url
 from src.desktop.settings_window import SettingsWindow
 from src.context.keyword_extraction import extract_keywords
 from src.context.connectors.browser import BrowserHistoryConnector
@@ -52,8 +50,6 @@ def build_client():
     tmpdir = tempfile.TemporaryDirectory()
     db_path = Path(tmpdir.name) / "lumos.db"
     store = SQLiteStore(db_path)
-    # This suite exercises the optional automatic interest learning flow.
-    store.update_settings({"auto_expand_interests": True})
     app.dependency_overrides[get_store] = lambda: store
     return TestClient(app), tmpdir, store
 
@@ -74,11 +70,9 @@ def main():
 
         assert run_web_app
         assert run_cloud
-        assert run_companion
         assert run_demo_reset
         assert run_demo_seed
         assert run_demo_web_app
-        assert run_demo_companion
         assert portable_main
         assert APP_NAME == "LUMOS"
         assert APP_VERSION == "0.1.0-alpha"
@@ -364,13 +358,6 @@ def main():
                 bridge_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 bridge_process.kill()
-        assert CompanionWindow
-        assert callable(is_server_running)
-        assert web_tab_url("http://127.0.0.1:8000", "today") == "http://127.0.0.1:8000/app#today"
-        assert web_tab_url("http://127.0.0.1:8000", "signals") == "http://127.0.0.1:8000/app#today"
-        assert web_tab_url("http://127.0.0.1:8000", "settings") == "http://127.0.0.1:8000/app#settings"
-        assert web_tab_url("http://127.0.0.1:8000", "activity") == "http://127.0.0.1:8000/app#activity"
-        assert web_tab_url("http://127.0.0.1:8000", "unknown") == "http://127.0.0.1:8000/app#today"
         web_files = [
             ROOT / "src" / "web" / "static" / "index.html",
             ROOT / "src" / "web" / "static" / "styles.css",
@@ -572,7 +559,9 @@ def main():
         assert "display_title_ko" in app_js
         assert "display_summary_ko" in app_js
         assert "원문 제목" in app_js
-        assert "원문 snippet" in app_js
+        assert "원문 설명" in app_js
+        assert "내용 정리" in app_js
+        assert "추가 신호 보기" in app_js
         assert "브리핑 참고 정보" in app_js
         assert "아직 오늘의 소식이 없어요." in app_js
         assert "아직 추천 기준이 충분하지 않아요." in app_js
@@ -608,22 +597,6 @@ def main():
         assert "mock mode" not in app_js.lower()
         assert "hybrid mode" not in app_js.lower()
         assert "live mode" not in app_js.lower()
-        companion_source = (ROOT / "src" / "desktop" / "companion_window.py").read_text(encoding="utf-8")
-        assert "LUMOS Companion" in companion_source
-        assert "Cloud 연결은 설정 화면에서 확인할 수 있어요." in companion_source
-        assert "계정: 로컬 모드" in companion_source
-        assert "작은 도우미" in companion_source
-        assert "오늘의 소식 열기" in companion_source
-        assert "새 소식 준비하기" in companion_source
-        assert "개인 맥락 동기화" in companion_source
-        assert "설정 화면 열기" in companion_source
-        assert "활동 기록 보기" in companion_source
-        assert "Companion 닫기" in companion_source
-        assert "서버 상태" not in companion_source
-        assert "pipeline run started" not in companion_source
-        assert "connection error" not in companion_source
-        assert "generate mode" not in companion_source.lower()
-
         response = client.get("/api/v1/settings")
         assert response.status_code == 200, response.text
         assert response.json()["settings"]["signal_count"] == 3
@@ -649,15 +622,6 @@ def main():
         response = client.put("/api/v1/settings", json={"signal_count": 5})
         assert response.status_code == 200, response.text
         assert response.json()["settings"]["signal_count"] == 5
-        response = client.put(
-            "/api/v1/settings",
-            json={"sync_before_briefing": True, "context_sync_interval_minutes": 15, "max_interest_keywords": 12},
-        )
-        assert response.status_code == 200, response.text
-        sync_settings = response.json()["settings"]
-        assert sync_settings["sync_before_briefing"] is True
-        assert sync_settings["context_sync_interval_minutes"] == 15
-        assert sync_settings["max_interest_keywords"] == 12
 
         response = client.post(
             "/api/v1/onboarding",
@@ -699,29 +663,6 @@ def main():
             json={"enabled": True, "config": {"folders": [str(sample_folder)]}},
         )
         assert response.status_code == 200, response.text
-        response = client.post("/api/v1/context/sync", json={"connector_types": ["browser_history", "local_files"], "limit": 20})
-        assert response.status_code == 200, response.text
-        sync_body = response.json()["result"]
-        assert sync_body["item_count"] >= 3, sync_body
-        assert sync_body["keyword_count"] > 0, sync_body
-
-        response = client.get("/api/v1/context/items")
-        assert response.status_code == 200, response.text
-        context_items = response.json()["items"]
-        assert context_items and all(len(item["text_snippet"]) <= 1000 for item in context_items)
-        item_count_before = len(store.get_context_items(limit=100))
-        response = client.post("/api/v1/context/sync/local_files", json={"limit": 20})
-        assert response.status_code == 200, response.text
-        assert len(store.get_context_items(limit=100)) == item_count_before
-
-        response = client.get("/api/v1/context/sync-runs")
-        assert response.status_code == 200, response.text
-        assert response.json()["runs"]
-
-        response = client.get("/api/v1/interests")
-        assert response.status_code == 200, response.text
-        interests_after_sync = response.json()["interests"]
-        assert any("agent" in item["keyword"] or "automation" in item["keyword"] for item in interests_after_sync)
         store.upsert_interest("mutedonlykeyword", "personal_context", 9.0, "manual", {"from": "smoke"})
         muted_keyword = "mutedonlykeyword"
         response = client.post(f"/api/v1/interests/{muted_keyword}/mute")
@@ -731,8 +672,6 @@ def main():
         assert response.status_code == 200, response.text
         planned_queries = " ".join(query["query"] for route in response.json()["routes"] for query in route["queries"])
         assert muted_keyword not in planned_queries
-        response = client.post("/api/v1/context/sync", json={"connector_types": ["browser_history"], "limit": 20})
-        assert response.status_code == 200, response.text
         response = client.get("/api/v1/interests", params={"include_muted": True, "limit": 200})
         muted_rows = [item for item in response.json()["interests"] if item["keyword"] == muted_keyword]
         assert muted_rows and muted_rows[0]["status"] == "muted"
@@ -779,7 +718,6 @@ def main():
         scheduler = DailyBriefingScheduler(store, notifier=lambda count: {"sent": False, "count": count})
         scheduled_result = scheduler.run_once(force=True, show_notification=False)
         assert scheduled_result["ran"] is True, scheduled_result
-        assert scheduled_result["context_sync"]["ran"] is True, scheduled_result
         assert len(scheduled_result["signals"]) == 4, scheduled_result
         assert all(signal["status"] == "active" for signal in scheduled_result["signals"])
         scheduled_run = store.get_last_scheduled_briefing_run()
@@ -796,13 +734,9 @@ def main():
         assert generated_by_service["generated"] is True
         service_feedback = service.record_feedback(scheduled_result["signals"][0]["id"], "opened", {"from": "service_smoke"})
         assert service_feedback["event_id"]
-        assert service_feedback["updated_keywords"]
-        tracked_signal = scheduled_result["signals"][0]
-        tracked_keyword = tracked_signal["category"]
-        store.mute_interest(tracked_keyword)
-        tracked_feedback = service.record_feedback(tracked_signal["id"], "tracked", {"from": "reactivate_smoke"})
-        assert tracked_feedback["updated_keywords"]
-        assert any(item["keyword"] == tracked_keyword and item["status"] == "active" for item in store.get_interests(include_muted=True, limit=500))
+        tracked_feedback = service.record_feedback(scheduled_result["signals"][0]["id"], "tracked", {"from": "tracking_smoke"})
+        assert tracked_feedback["event_id"]
+        assert all(item["source"] not in {"feedback", "browser_history", "local_files"} for item in store.get_interests(include_muted=True, limit=500))
         updated_settings = service.update_settings({"signal_count": 3, "briefing_time": "09:15", "generate_mode": "hybrid"})
         assert updated_settings["signal_count"] == 3
         assert updated_settings["briefing_time"] == "09:15"
@@ -918,11 +852,10 @@ def main():
         )
         assert response.status_code == 200, response.text
         assert response.json()["data"]["signal"]["status"] == "tracked"
-        assert response.json()["data"]["updated_keywords"]
 
         response = client.get("/api/v1/interests")
         assert response.status_code == 200, response.text
-        assert any(item["source"] == "feedback" for item in response.json()["interests"])
+        assert all(item["source"] not in {"feedback", "browser_history", "local_files"} for item in response.json()["interests"])
 
         print({
             "health": "ok",

@@ -2,6 +2,8 @@
 import re
 import unicodedata
 
+from src.signals.translation import translate_to_english, translate_to_korean
+
 
 ALIASES = (
     ("마케팅", "마케터", "marketing", "marketer", "marketers"),
@@ -11,11 +13,37 @@ ALIASES = (
     ("콘텐츠", "컨텐츠", "content creation", "content marketing", "creator economy"),
     ("인공지능", "ai", "artificial intelligence"),
     ("생성형 ai", "생성형 인공지능", "generative ai"),
+    ("ai 업무 자동화", "ai automation", "workflow automation", "agentic automation", "ai agents"),
+    ("데이터 분석 자동화", "data analysis automation", "analytics automation", "data automation", "automated analytics"),
+    ("소프트웨어 개발", "software development", "software engineering", "software developer", "developer tools"),
+    ("개발자", "developer", "developers", "developer tools", "software developer"),
     ("취업", "채용", "recruitment", "hiring", "job search"),
     ("스타트업", "startup", "startups"),
     ("자동화", "automation"),
     ("추천 시스템", "recommendation system", "recommender system"),
 )
+
+# A literal translation can be much broader than the intent expressed by a
+# Korean interest. These profiles preserve that intent for search while keeping
+# the rule set inspectable and free of an extra paid model/API dependency.
+YOUTUBE_QUERY_PROFILES = {
+    "마케팅": {
+        "queries": ["마케팅 전략", "digital marketing strategy"],
+        "exclude": ["agriculture", "agricultural", "farming", "farmer", "farm", "livestock", "crop", "농업", "농부", "축산", "농촌"],
+    },
+    "마케터": {
+        "queries": ["마케팅 전략", "digital marketing strategy"],
+        "exclude": ["agriculture", "agricultural", "farming", "farmer", "farm", "livestock", "crop", "농업", "농부", "축산", "농촌"],
+    },
+    "콘텐츠 기획자": {
+        "queries": ["콘텐츠 전략", "content strategy"],
+        "exclude": [],
+    },
+    "데이터 마케터": {
+        "queries": ["데이터 마케팅", "marketing analytics"],
+        "exclude": ["agriculture", "agricultural", "farming", "farmer", "farm"],
+    },
+}
 
 # Words people use to declare an interest that carry no topical meaning on their own.
 # Filtered out before a keyword phrase is used for matching, both from fixed English
@@ -70,7 +98,29 @@ def interest_terms(keyword):
     for aliases in ALIASES:
         if normalized.replace(" ", "") in [normalize(alias).replace(" ", "") for alias in aliases]:
             return list(dict.fromkeys([normalized, *map(normalize, aliases)]))
-    return [normalized] if normalized else []
+    if not normalized:
+        return []
+    translated = (
+        translate_to_english(core, timeout=2.0)
+        if any("가" <= char <= "힣" for char in core)
+        else translate_to_korean(core, timeout=2.0)
+    )
+    translated_normalized = normalize(translated) if translated else ""
+    return list(dict.fromkeys([normalized, *([translated_normalized] if translated_normalized else [])]))
+
+
+def youtube_search_profiles(keyword):
+    """Return meaning-preserving YouTube queries and safe context exclusions."""
+    core = _strip_declaration_scaffolding(keyword)
+    normalized = normalize(core) or normalize(keyword)
+    profile = YOUTUBE_QUERY_PROFILES.get(normalized)
+    if profile:
+        return [{"query": query, "exclude": profile["exclude"], "interest": normalized} for query in profile["queries"]]
+
+    # Unknown Korean topics keep their original wording as well as a best-effort
+    # translation, rather than silently replacing the original intent.
+    terms = interest_terms(keyword)
+    return [{"query": term, "exclude": [], "interest": normalized} for term in terms[:2] if term]
 
 
 def _meaningful_words(term):
@@ -79,6 +129,9 @@ def _meaningful_words(term):
 
 def matches_interest(text, keyword):
     text = normalize(text)
+    profile = YOUTUBE_QUERY_PROFILES.get(normalize(_strip_declaration_scaffolding(keyword)) or normalize(keyword))
+    if profile and any(normalize(term) in text for term in profile["exclude"]):
+        return False
     for term in interest_terms(keyword):
         if re.search(r"[가-힣]", term) and term.replace(" ", "") in text.replace(" ", ""):
             return True

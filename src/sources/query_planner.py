@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from src.context.interest_matching import interest_terms
+from src.context.interest_matching import interest_terms, youtube_search_profiles
 
 
 class QueryPlanner:
@@ -17,7 +17,7 @@ class QueryPlanner:
             source = route["source"]
             source_config = route.get("source_config") or {}
             config_keywords = source_config.get("keywords") or []
-            effective_keywords = self._unique([*config_keywords, *keywords])
+            effective_keywords = self._unique([*keywords, *config_keywords])
             queries = self._queries_for_source(source, effective_keywords, role, goals, route["category"], source_config)
             planned.append({**route, "queries": queries})
         return planned
@@ -49,13 +49,19 @@ class QueryPlanner:
             "region": source_config.get("region"),
         }
         base_params = {key: value for key, value in base_params.items() if value}
-        groups = [interest_terms(keyword) for keyword in keywords]
+        original_keywords = self._unique(keywords)
+        groups = [interest_terms(keyword) for keyword in original_keywords]
         preferred = [next((term for term in group if not self._contains_korean(term)), group[0]) for group in groups if group]
         keywords = self._unique([*preferred, *[term for group in groups for term in group]])
         english = [kw for kw in keywords if not self._contains_korean(kw)]
         korean = [kw for kw in keywords if self._contains_korean(kw)]
-        primary = english or keywords
+        # Give every saved interest one search slot before spending slots on
+        # aliases of the highest-weight interest. The old flattened English
+        # list could fill a source's query cap with marketing/marketer/etc.
+        # and leave other interests completely unsearched.
+        primary = self._unique([*preferred, *english, *korean]) or keywords
         korean_primary = korean or ["생성형 AI", "스타트업", "커리어"]
+        bilingual_terms = self._unique([*original_keywords, *[term for group in groups for term in group]])
 
         if source == "github":
             terms = primary[:4]
@@ -80,10 +86,37 @@ class QueryPlanner:
         if source == "reddit":
             return [{"query": f"{term} community reaction", "params": {"kind": "discussion"}} for term in self._unique(primary[:3])[:3]]
         if source == "youtube":
-            return [{"query": f"{term} trend", "params": {"kind": "video"}} for term in self._unique(primary[:3])[:3]]
+            semantic_queries = []
+            for keyword in original_keywords:
+                for profile in youtube_search_profiles(keyword):
+                    semantic_queries.append({
+                        "query": profile["query"],
+                        "params": {
+                            **base_params,
+                            # Search each language in its own language instead
+                            # of forcing Korean interests through an English-only
+                            # result set (or vice versa).
+                            "language": "ko" if self._contains_korean(profile["query"]) else "en",
+                            "kind": "video",
+                            "semantic_excludes": profile["exclude"],
+                            "interest_keyword": profile["interest"],
+                        },
+                    })
+            if semantic_queries:
+                unique_queries = []
+                seen_queries = set()
+                for entry in semantic_queries:
+                    query_key = entry["query"].casefold()
+                    if query_key not in seen_queries:
+                        unique_queries.append(entry)
+                        seen_queries.add(query_key)
+                return unique_queries[:2]
+            return [{"query": f"{term} trend", "params": {**base_params, "kind": "video"}} for term in self._unique(primary[:2])[:2]]
         if source in {"rss", "official_ai_blogs", "company_newsroom"}:
             terms = primary[:3] + [category.replace("_", " ").lower()]
-            params = {**base_params, "kind": "feed_filter", "feed_urls": feed_urls, "keywords": primary[:5]}
+            # One configured feed is fetched only once. Its Korean and English
+            # entries are matched against the same bilingual interest set.
+            params = {**base_params, "kind": "feed_filter", "feed_urls": feed_urls, "keywords": bilingual_terms[:10]}
             if feed_urls:
                 return [{"query": url, "params": params} for url in feed_urls[:4]]
             return [{"query": term, "params": params} for term in self._unique(terms)[:4]]

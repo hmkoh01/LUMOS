@@ -194,6 +194,15 @@ SCHEMA_STATEMENTS = [
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS signal_reserves (
+        pipeline_run_id INTEGER NOT NULL,
+        rank INTEGER NOT NULL,
+        candidate_json TEXT NOT NULL,
+        signal_id INTEGER,
+        PRIMARY KEY (pipeline_run_id, rank)
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_interest_graph_keyword ON interest_graph(keyword)",
     "CREATE INDEX IF NOT EXISTS idx_signals_date_rank ON signals(signal_date, rank)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_events_signal ON feedback_events(signal_id)",
