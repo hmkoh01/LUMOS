@@ -134,6 +134,18 @@ class SQLiteRetrievalService:
             if row:
                 results.insert(0, self._to_context(dict(row), selected=True, retrieval_score=1.0))
 
+        # If nothing passed the text-relevance filter, fall back to top-N by
+        # recency + confidence so general queries ("이번 주 소식 알려줘") still
+        # get context rather than returning empty.
+        if not results:
+            for sid, signal in signals.items():
+                if sid == selected_signal_id:
+                    continue
+                conf = float(signal.get("confidence") or 0.5)
+                rec = self._recency_score(signal, now, days)
+                ctx = self._to_context(signal, retrieval_score=0.3 * conf + 0.7 * rec)
+                results.append(ctx)
+
         results.sort(key=lambda x: (0 if x.is_selected else 1, -x.retrieval_score))
         return results[:limit]
 

@@ -114,12 +114,62 @@ class ClaudeProvider:
         return "\n".join(lines)
 
 
+class GeminiProvider:
+    """Google Gemini LLM provider."""
+
+    _SYSTEM = (
+        "당신은 LUMOS 뉴스 브리핑 어시스턴트입니다. "
+        "아래 [참고 소식] 목록에 있는 내용만 사용해 답변하세요. "
+        "목록에 없는 정보를 추측하거나 만들어내지 마세요. "
+        "답변은 한국어로 간결하게 핵심만 전달하세요. "
+        "출처 인용 번호([1], [2] 등)는 쓰지 마세요 — 서버가 출처를 따로 표시합니다."
+    )
+
+    def __init__(self, api_key: str, model: str) -> None:
+        from google import genai  # lazy import — requires google-genai package
+        self._client = genai.Client(api_key=api_key)
+        self._model_name = model
+
+    def generate_answer(
+        self,
+        question: str,
+        context_docs: List[RetrievedContext],
+        history: List[Dict[str, str]],
+    ) -> str:
+        if not context_docs:
+            return (
+                "선택한 기간에 관련 브리핑 소식이 없어요. "
+                "다른 기간을 선택하거나 '소식 새로 받기'를 눌러 보세요."
+            )
+        from google.genai import types  # lazy import
+        context_block = ClaudeProvider._build_context(context_docs)
+
+        # Build contents: history + current user turn
+        contents = []
+        for msg in history:
+            role = "model" if msg["role"] == "assistant" else "user"
+            contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+        contents.append(types.Content(
+            role="user",
+            parts=[types.Part(text=f"{context_block}\n\n질문: {question}")],
+        ))
+
+        try:
+            response = self._client.models.generate_content(
+                model=self._model_name,
+                config=types.GenerateContentConfig(system_instruction=self._SYSTEM),
+                contents=contents,
+            )
+            return response.text.strip()
+        except Exception as exc:
+            logger.error("Gemini API error: %s", exc)
+            raise
+
+
 def build_provider_from_env() -> LLMProvider:
     """
     Factory: reads LUMOS_LLM_PROVIDER to select provider.
     Falls back to MockProvider when API key is missing.
-
-    Swap point: add elif branches for openai, gemini, etc.
     """
     name = os.environ.get("LUMOS_LLM_PROVIDER", "mock").strip().lower()
 
@@ -133,6 +183,17 @@ def build_provider_from_env() -> LLMProvider:
             return MockProvider()
         model = os.environ.get("LUMOS_LLM_MODEL", "claude-haiku-4-5-20251001").strip()
         return ClaudeProvider(api_key=key, model=model)
+
+    if name == "gemini":
+        key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not key:
+            logger.warning(
+                "LUMOS_LLM_PROVIDER=gemini but GEMINI_API_KEY not set; "
+                "falling back to MockProvider"
+            )
+            return MockProvider()
+        model = os.environ.get("LUMOS_LLM_MODEL", "gemini-2.0-flash").strip()
+        return GeminiProvider(api_key=key, model=model)
 
     if name != "mock":
         logger.warning("Unknown LUMOS_LLM_PROVIDER=%r; using mock", name)

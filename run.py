@@ -14,6 +14,13 @@ import uvicorn
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+# Load .env file before any src imports so env vars are available at import time.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=False)  # don't override vars already set in the shell
+except ImportError:
+    pass
+
 from src.app.config import API_HOST, API_PORT
 from src.app.runtime import create_runtime
 from src.app.scheduler import DailyBriefingScheduler
