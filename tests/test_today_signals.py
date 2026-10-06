@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -212,6 +213,48 @@ class TodaySignalsTest(unittest.TestCase):
             self.assertEqual(signal["source_display"], "샘플 데이터")
             self.assertEqual(signal["data_kind"], "mock")
             self.assertEqual(signal["generation_mode"], "mock")
+
+    def test_period_briefings_prefer_published_time_fallback_and_dedupe(self):
+        def add(title, url, confidence, published_at=None):
+            signal_id = self.store.create_signal({
+                "title": title, "summary": "summary", "why_it_matters": "why",
+                "source_name": "rss", "source_url": url, "confidence": confidence,
+                "status": "active", "source_items_json": [{"url": url, "published_at": published_at}],
+                "metadata_json": {"briefing_version": 9, "published_at": published_at},
+            })
+            return signal_id
+
+        recent_id = add("today", "https://period.test/today", .4, "2026-10-06T01:00:00Z")
+        week_id = add("week", "https://period.test/week", .9, "2026-10-02T10:00:00Z")
+        month_id = add("month", "https://period.test/month", .7, "2026-09-15T10:00:00Z")
+        old_id = add("old", "https://period.test/old", .99, "2026-08-01T10:00:00Z")
+        fallback_id = add("fallback", "https://period.test/fallback", .8)
+        duplicate_id = add("duplicate", "https://period.test/week", .95, "2026-10-02T10:00:00Z")
+        with self.store.connect() as conn:
+            conn.execute("UPDATE signals SET created_at = ? WHERE id = ?", ("2026-10-05 12:00:00", fallback_id))
+            conn.commit()
+
+        reference = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+        today = self.store.get_signals_for_period("today", now=reference)
+        week = self.store.get_signals_for_period("week", now=reference)
+        month = self.store.get_signals_for_period("month", now=reference)
+
+        self.assertEqual({item["id"] for item in today}, {recent_id, fallback_id})
+        self.assertEqual({item["id"] for item in week}, {recent_id, fallback_id, duplicate_id})
+        self.assertEqual({item["id"] for item in month}, {recent_id, month_id, fallback_id, duplicate_id})
+        self.assertNotIn(old_id, {item["id"] for item in month})
+        self.assertEqual(len([item for item in week if item["source_url"] == "https://period.test/week"]), 1)
+        self.assertEqual(week[0]["id"], duplicate_id)
+
+    def test_period_endpoint_and_validation(self):
+        self.store.create_signal({"title": "period", "summary": "summary", "why_it_matters": "why",
+                                  "source_url": "https://period.test/api", "status": "active",
+                                  "metadata_json": {"briefing_version": 9, "published_at": "2026-10-06T10:00:00Z"}})
+        response = self.client.get("/api/v1/signals?period=week")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["period"], "week")
+        self.assertFalse(response.json()["has_more"])
+        self.assertEqual(self.client.get("/api/v1/signals?period=year").status_code, 422)
 
 
 if __name__ == "__main__":

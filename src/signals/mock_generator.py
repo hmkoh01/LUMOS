@@ -3,17 +3,17 @@ from typing import Any, Dict, List
 
 from src.signals.korean_briefing import build_korean_briefing
 from src.signals.provenance import source_metadata
-from src.storage.sqlite_store import SQLiteStore
+from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 
 
 class MockSignalGenerator:
     def __init__(self, store: SQLiteStore):
         self.store = store
 
-    def generate_daily_signals(self) -> List[Dict[str, Any]]:
-        settings = self.store.get_settings()
-        profile = self.store.get_profile() or {}
-        interests = self.store.get_interests(limit=50)
+    def generate_daily_signals(self, user_id: int = DEFAULT_LOCAL_USER_ID) -> List[Dict[str, Any]]:
+        settings = self.store.get_settings(user_id=user_id)
+        profile = self.store.get_profile(user_id=user_id) or {}
+        interests = self.store.get_interests(limit=50, user_id=user_id)
         signal_count = max(1, int(settings.get("signal_count", 3)))
 
         keywords = [item["keyword"] for item in interests if item.get("keyword")]
@@ -24,8 +24,8 @@ class MockSignalGenerator:
         for rank in range(1, signal_count + 1):
             keyword = keywords[(rank - 1) % len(keywords)]
             signal = self._build_signal(keyword, profile, rank)
-            signal_id = self.store.create_signal(signal)
-            created.append(self.store.get_signal(signal_id))
+            signal_id = self.store.create_signal(signal, user_id=user_id)
+            created.append(self.store.get_signal(signal_id, user_id=user_id))
         return [signal for signal in created if signal]
 
     def _fallback_keywords(self, profile: Dict[str, Any]) -> List[str]:

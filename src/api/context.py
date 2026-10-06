@@ -3,8 +3,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src.api.dependencies import get_store
-from src.storage.sqlite_store import SQLiteStore
+from src.api.dependencies import CurrentUser, get_current_user, get_store
+from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 
 router = APIRouter(tags=["context"])
 
@@ -43,9 +43,11 @@ TREND_RECOMMENDATIONS = [
 RECOMMENDATION_COUNT = 4
 
 
-def _interest_recommendations(store: SQLiteStore):
+def _interest_recommendations(store: SQLiteStore, user_id: int = DEFAULT_LOCAL_USER_ID):
     """Return a full, fixed-size set of interest suggestions when candidates exist."""
-    interests = store.get_interests(limit=None, include_muted=True, include_deleted=True)
+    interests = store.get_interests(
+        limit=None, include_muted=True, include_deleted=True, user_id=user_id
+    )
     known = {str(item["keyword"]).strip().casefold() for item in interests}
     active_text = " ".join(item["keyword"] for item in interests if item.get("status") == "active").casefold()
     recent_text = " ".join(
@@ -79,15 +81,33 @@ class InterestCreate(BaseModel):
 
 
 @router.post("/interests")
-def add_interest(request: InterestCreate, store: SQLiteStore = Depends(get_store)):
+def add_interest(
+    request: InterestCreate,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     if not request.keyword.strip():
         raise HTTPException(status_code=422, detail="키워드를 입력해주세요.")
-    return {"success": True, "interest": store.add_manual_interest(request.keyword)}
+    return {"success": True, "interest": store.add_manual_interest(request.keyword, user_id=current_user.id)}
 
 
 @router.get("/context/items")
-def get_context_items(connector_type: Optional[str] = None, limit: int = 50, store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "items": store.get_context_items(connector_type=connector_type, limit=max(1, min(limit, 200)))}
+def get_context_items(
+    connector_type: Optional[str] = None,
+    limit: int = 50,
+    search: Optional[str] = None,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return {
+        "success": True,
+        "items": store.get_context_items(
+            connector_type=connector_type,
+            limit=max(1, min(limit, 200)),
+            search=search,
+            user_id=current_user.id,
+        ),
+    }
 
 
 @router.get("/interests")
@@ -96,6 +116,7 @@ def get_interests(
     limit: int = 50,
     include_muted: bool = False,
     store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     return {
         "success": True,
@@ -104,48 +125,70 @@ def get_interests(
             limit=max(1, min(limit, 500)),
             include_muted=include_muted,
             include_deleted=False,
+            user_id=current_user.id,
         ),
     }
 
 
 @router.get("/interests/recommendations")
-def get_interest_recommendations(store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "recommendations": _interest_recommendations(store)}
+def get_interest_recommendations(
+    store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    return {"success": True, "recommendations": _interest_recommendations(store, current_user.id)}
 
 
 @router.post("/interests/recommendations/{keyword}/dismiss")
-def dismiss_interest_recommendation(keyword: str, store: SQLiteStore = Depends(get_store)):
-    store.add_manual_interest(keyword)
-    store.delete_interest(keyword)
+def dismiss_interest_recommendation(
+    keyword: str, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    store.add_manual_interest(keyword, user_id=current_user.id)
+    store.delete_interest(keyword, user_id=current_user.id)
     return {"success": True}
 
 
 @router.put("/interests/{keyword}")
-def update_interest(keyword: str, request: InterestUpdate, store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "interest": store.update_interest(keyword, request.dict(exclude_none=True))}
+def update_interest(
+    keyword: str,
+    request: InterestUpdate,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return {"success": True, "interest": store.update_interest(keyword, request.dict(exclude_none=True), user_id=current_user.id)}
 
 
 @router.post("/interests/{keyword}/mute")
-def mute_interest(keyword: str, store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "interest": store.mute_interest(keyword)}
+def mute_interest(
+    keyword: str, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    return {"success": True, "interest": store.mute_interest(keyword, user_id=current_user.id)}
 
 
 @router.post("/interests/{keyword}/unmute")
-def unmute_interest(keyword: str, store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "interest": store.unmute_interest(keyword)}
+def unmute_interest(
+    keyword: str, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    return {"success": True, "interest": store.unmute_interest(keyword, user_id=current_user.id)}
 
 
 @router.delete("/interests/{keyword}")
-def delete_interest(keyword: str, store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "deleted": store.delete_interest(keyword)}
+def delete_interest(
+    keyword: str, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    return {"success": True, "deleted": store.delete_interest(keyword, user_id=current_user.id)}
 
 
 @router.get("/interests/{keyword}/evidence")
-def get_interest_evidence(keyword: str, store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "evidence": store.get_interest_evidence(keyword)}
+def get_interest_evidence(
+    keyword: str, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    return {"success": True, "evidence": store.get_interest_evidence(keyword, user_id=current_user.id)}
 
 
 @router.post("/context/prune-interests")
-def prune_interests(max_keywords: Optional[int] = None, store: SQLiteStore = Depends(get_store)):
-    limit = max_keywords or store.get_settings()["max_interest_keywords"]
-    return {"success": True, "result": store.prune_interests(limit)}
+def prune_interests(
+    max_keywords: Optional[int] = None,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    limit = max_keywords or store.get_settings(user_id=current_user.id)["max_interest_keywords"]
+    return {"success": True, "result": store.prune_interests(limit, user_id=current_user.id)}

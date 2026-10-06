@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 
 from src.context.keyword_extraction import extract_keywords
-from src.storage.sqlite_store import SQLiteStore
+from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 
 
 FEEDBACK_DELTAS = {
@@ -34,10 +34,11 @@ def apply_feedback_learning(
     event_type: str,
     payload: Dict[str, Any] = None,
     multiplier: float = 1.0,
+    user_id: int = DEFAULT_LOCAL_USER_ID,
 ) -> List[str]:
     if event_type not in FEEDBACK_DELTAS or signal_id <= 0:
         return []
-    signal = store.get_signal(signal_id)
+    signal = store.get_signal(signal_id, user_id=user_id)
     if not signal:
         return []
     delta = FEEDBACK_DELTAS[event_type] * multiplier
@@ -57,11 +58,11 @@ def apply_feedback_learning(
         if value:
             keyword_scores.setdefault(str(value).strip().casefold(), 1.0)
 
-    for interest in store.get_interests(status="active", limit=None):
+    for interest in store.get_interests(status="active", limit=None, user_id=user_id):
         score = keyword_scores.get(str(interest.get("keyword", "")).casefold())
         if score is None:
             continue
         next_weight = max(0.1, min(10.0, float(interest.get("weight") or 1.0) + delta * score))
-        store.update_interest(interest["keyword"], weight=next_weight)
+        store.update_interest(interest["keyword"], weight=next_weight, user_id=user_id)
         updated.append(interest["keyword"])
     return updated

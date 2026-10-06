@@ -7,7 +7,7 @@ import re
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from src.api.dependencies import get_store
+from src.api.dependencies import CurrentUser, get_current_user, get_store
 from src.storage.sqlite_store import SQLiteStore
 
 router = APIRouter(tags=["chat"])
@@ -22,11 +22,15 @@ def _terms(value: str) -> set[str]:
 
 
 @router.post("/chat")
-def chat(request: ChatRequest, store: SQLiteStore = Depends(get_store)):
+def chat(
+    request: ChatRequest,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     question = request.message.strip()
     if not question:
         return {"answer": "궁금한 점을 입력해 주세요.", "sources": []}
-    signals = store.get_today_signals(include_archived=False)
+    signals = store.get_today_signals(include_archived=False, user_id=current_user.id)
     if not signals:
         return {"answer": "아직 추천한 원문이 없어요. 먼저 오늘의 소식을 받아오면 그 자료를 바탕으로 함께 볼 수 있어요.", "sources": []}
     query_terms = _terms(question)

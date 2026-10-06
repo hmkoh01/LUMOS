@@ -1,9 +1,9 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from src.api.dependencies import get_store
+from src.api.dependencies import CurrentUser, get_current_user, get_store
 from src.api.pipeline import generate_signals_from_mock_pipeline
 from src.context.feedback_learning import apply_feedback_learning
 from src.signals.mock_generator import MockSignalGenerator
@@ -22,49 +22,80 @@ class MoreSignalsRequest(BaseModel):
     pipeline_run_id: int
 
 
+@router.get("/signals")
+def get_signals_for_period(
+    period: Literal["today", "week", "month"] = "today",
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    signals = store.get_signals_for_period(period, user_id=current_user.id)
+    # Reserve pagination is only meaningful for the active daily pipeline run.
+    expansion = store.signal_expansion_status(user_id=current_user.id) if period == "today" else {"pipeline_run_id": None, "has_more": False}
+    return {"success": True, "period": period, "signals": signals, **expansion}
+
+
 @router.get("/signals/today")
-def get_today_signals(store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "signals": store.get_today_signals(include_archived=False), **store.signal_expansion_status()}
+def get_today_signals(
+    store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    return {
+        "success": True,
+        "signals": store.get_today_signals(include_archived=False, user_id=current_user.id),
+        **store.signal_expansion_status(user_id=current_user.id),
+    }
 
 
 @router.get("/signals/saved")
-def get_saved_signals(store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "signals": store.get_saved_signals()}
+def get_saved_signals(
+    store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    return {"success": True, "signals": store.get_saved_signals(user_id=current_user.id)}
 
 
 @router.delete("/signals/{signal_id}/saved")
-def delete_saved_signal(signal_id: int, store: SQLiteStore = Depends(get_store)):
-    if not store.delete_saved_signal(signal_id):
+def delete_saved_signal(
+    signal_id: int, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    if not store.delete_saved_signal(signal_id, user_id=current_user.id):
         raise HTTPException(status_code=404, detail="저장한 소식을 찾지 못했어요.")
     return {"success": True}
 
 
 @router.get("/signals/feedback/{event_type}")
-def get_feedback_signals(event_type: str, store: SQLiteStore = Depends(get_store)):
-    return {"success": True, "signals": store.get_feedback_signals(event_type)}
+def get_feedback_signals(
+    event_type: str, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    return {"success": True, "signals": store.get_feedback_signals(event_type, user_id=current_user.id)}
 
 
 @router.delete("/signals/{signal_id}/feedback/{event_type}")
-def clear_feedback_signal(signal_id: int, event_type: str, store: SQLiteStore = Depends(get_store)):
-    if not store.has_feedback_signal(signal_id, event_type):
+def clear_feedback_signal(
+    signal_id: int, event_type: str, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    if not store.has_feedback_signal(signal_id, event_type, user_id=current_user.id):
         raise HTTPException(status_code=404, detail="설정한 피드백을 찾지 못했어요.")
-    apply_feedback_learning(store, signal_id, event_type, {"reverted": True}, multiplier=-1)
-    if not store.clear_feedback_signal(signal_id, event_type):
+    apply_feedback_learning(store, signal_id, event_type, {"reverted": True}, multiplier=-1, user_id=current_user.id)
+    if not store.clear_feedback_signal(signal_id, event_type, user_id=current_user.id):
         raise HTTPException(status_code=404, detail="설정한 피드백을 찾지 못했어요.")
     return {"success": True}
 
 
 @router.post("/signals/more")
-def get_more_signals(request: MoreSignalsRequest, store: SQLiteStore = Depends(get_store)):
+def get_more_signals(
+    request: MoreSignalsRequest,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     run_id = request.pipeline_run_id
-    if store.signal_expansion_status()["pipeline_run_id"] != run_id:
+    user_id = current_user.id
+    if store.signal_expansion_status(user_id=user_id)["pipeline_run_id"] != run_id:
         raise HTTPException(status_code=409, detail="브리핑이 바뀌었어요. 새로고침 후 다시 시도해주세요.")
     generator = SignalGenerator(store)
-    run = store.get_pipeline_run(run_id) or {}
+    run = store.get_pipeline_run(run_id, user_id=user_id) or {}
     prepared = []
-    current_signals = store.get_today_active_signals()
+    current_signals = store.get_today_active_signals(user_id=user_id)
     next_rank = max((int(signal.get("rank") or 0) for signal in current_signals), default=0) + 1
-    for reserve_rank, candidate in store.get_signal_reserves(run_id):
+    for reserve_rank, candidate in store.get_signal_reserves(run_id, user_id=user_id):
         signal = generator._build_signal(candidate, run.get("profile_snapshot_json", {}),
                                          run.get("interest_snapshot_json", []), next_rank)
         signal["metadata_json"]["is_additional"] = True
@@ -73,22 +104,34 @@ def get_more_signals(request: MoreSignalsRequest, store: SQLiteStore = Depends(g
         prepared.append((reserve_rank, signal))
         next_rank += 1
     try:
-        store.reveal_signals(run_id, prepared)
+        store.reveal_signals(run_id, prepared, user_id=user_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    return {"success": True, "signals": store.get_today_active_signals(), **store.signal_expansion_status()}
+    return {
+        "success": True,
+        "signals": store.get_today_active_signals(user_id=user_id),
+        **store.signal_expansion_status(user_id=user_id),
+    }
 
 
 @router.post("/signals/generate-mock")
-def generate_mock_signals(store: SQLiteStore = Depends(get_store)):
-    signals = MockSignalGenerator(store).generate_daily_signals()
+def generate_mock_signals(
+    store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    signals = MockSignalGenerator(store).generate_daily_signals(user_id=current_user.id)
     return {"success": True, "count": len(signals), "signals": signals}
 
 
 @router.post("/signals/generate")
-def generate_signals(request: Optional[GenerateSignalsRequest] = None, store: SQLiteStore = Depends(get_store)):
+def generate_signals(
+    request: Optional[GenerateSignalsRequest] = None,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     body = request or GenerateSignalsRequest()
-    result = generate_signals_from_mock_pipeline(store, replace_today=body.replace_today, mode=body.mode)
+    result = generate_signals_from_mock_pipeline(
+        store, replace_today=body.replace_today, mode=body.mode, user_id=current_user.id
+    )
     return {
         "success": True,
         "pipeline_run_id": result.get("pipeline_run_id"),

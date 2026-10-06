@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from src.sources.source_registry import SOURCE_REGISTRY
-from src.storage.sqlite_store import SQLiteStore
+from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 
 
 class RankingService:
@@ -17,10 +17,13 @@ class RankingService:
     def __init__(self, store: SQLiteStore):
         self.store = store
 
-    def rank(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        recent_titles = [signal["title"].lower() for signal in self.store.get_recent_signals(limit=50)]
+    def rank(self, candidates: List[Dict[str, Any]], user_id: int = DEFAULT_LOCAL_USER_ID) -> List[Dict[str, Any]]:
+        recent_titles = [
+            signal["title"].lower()
+            for signal in self.store.get_recent_signals(limit=50, user_id=user_id)
+        ]
         interest_weights = {item["keyword"]: float(item.get("weight") or 0)
-                            for item in self.store.get_interests(status="active", limit=None)}
+                            for item in self.store.get_interests(status="active", limit=None, user_id=user_id)}
         max_interest_weight = max(interest_weights.values(), default=1.0)
         ranked = []
         for candidate in candidates:

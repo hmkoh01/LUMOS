@@ -1,7 +1,16 @@
 SCHEMA_STATEMENTS = [
     """
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        external_id TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS user_settings (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1 UNIQUE,
         signal_count INTEGER NOT NULL DEFAULT 3,
         briefing_time TEXT NOT NULL DEFAULT '08:00',
         timezone TEXT NOT NULL DEFAULT 'Asia/Seoul',
@@ -21,7 +30,8 @@ SCHEMA_STATEMENTS = [
     """,
     """
     CREATE TABLE IF NOT EXISTS user_profile (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1 UNIQUE,
         role TEXT NOT NULL DEFAULT '',
         role_detail TEXT NOT NULL DEFAULT '',
         goals_json TEXT NOT NULL DEFAULT '[]',
@@ -34,7 +44,8 @@ SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS connectors (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        connector_type TEXT NOT NULL UNIQUE,
+        user_id INTEGER NOT NULL DEFAULT 1,
+        connector_type TEXT NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 0,
         auth_status TEXT NOT NULL DEFAULT 'not_connected',
         config_json TEXT NOT NULL DEFAULT '{}',
@@ -42,12 +53,14 @@ SCHEMA_STATEMENTS = [
         last_status TEXT,
         last_error TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, connector_type)
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS interest_graph (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1,
         keyword TEXT NOT NULL,
         category TEXT,
         weight REAL NOT NULL DEFAULT 1.0,
@@ -57,7 +70,7 @@ SCHEMA_STATEMENTS = [
         last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(keyword, category, source)
+        UNIQUE(user_id, keyword, category, source)
     )
     """,
     """
@@ -77,6 +90,7 @@ SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS context_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1,
         connector_type TEXT NOT NULL,
         item_id TEXT NOT NULL,
         dedupe_key TEXT NOT NULL,
@@ -87,12 +101,14 @@ SCHEMA_STATEMENTS = [
         metadata_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT,
         updated_at TEXT,
-        collected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        collected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, dedupe_key)
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS context_sync_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1,
         connector_type TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'running',
         started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -106,13 +122,15 @@ SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS source_configs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_id TEXT NOT NULL UNIQUE,
+        user_id INTEGER NOT NULL DEFAULT 1,
+        source_id TEXT NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 0,
         display_name TEXT NOT NULL DEFAULT '',
         config_json TEXT NOT NULL DEFAULT '{}',
         priority INTEGER NOT NULL DEFAULT 50,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, source_id)
     )
     """,
     """
@@ -149,6 +167,7 @@ SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS signals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1,
         pipeline_run_id INTEGER,
         dedupe_key TEXT,
         signal_date TEXT NOT NULL,
@@ -172,6 +191,7 @@ SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS pipeline_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1,
         run_type TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'running',
         started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -188,6 +208,7 @@ SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS feedback_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1,
         signal_id INTEGER NOT NULL,
         event_type TEXT NOT NULL,
         payload_json TEXT NOT NULL DEFAULT '{}',
@@ -206,9 +227,9 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_interest_graph_keyword ON interest_graph(keyword)",
     "CREATE INDEX IF NOT EXISTS idx_signals_date_rank ON signals(signal_date, rank)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_events_signal ON feedback_events(signal_id)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_context_items_dedupe ON context_items(dedupe_key)",
-    "CREATE INDEX IF NOT EXISTS idx_context_items_connector ON context_items(connector_type, collected_at)",
-    "CREATE INDEX IF NOT EXISTS idx_context_sync_runs_started ON context_sync_runs(started_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_context_items_user_dedupe ON context_items(user_id, dedupe_key)",
+    "CREATE INDEX IF NOT EXISTS idx_context_items_user_connector ON context_items(user_id, connector_type, collected_at)",
+    "CREATE INDEX IF NOT EXISTS idx_context_sync_runs_user_started ON context_sync_runs(user_id, started_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_source_configs_enabled ON source_configs(enabled, priority)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_source_items_dedupe ON source_items(dedupe_key)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_candidates_dedupe ON signal_candidates(dedupe_key)",
@@ -243,6 +264,10 @@ MIGRATION_COLUMNS = {
         "max_interest_keywords": "INTEGER NOT NULL DEFAULT 50",
     },
     "interest_graph": {
+        "user_id": "INTEGER NOT NULL DEFAULT 1",
         "status": "TEXT NOT NULL DEFAULT 'active'",
     },
+    "signals": {"user_id": "INTEGER NOT NULL DEFAULT 1"},
+    "pipeline_runs": {"user_id": "INTEGER NOT NULL DEFAULT 1"},
+    "feedback_events": {"user_id": "INTEGER NOT NULL DEFAULT 1"},
 }

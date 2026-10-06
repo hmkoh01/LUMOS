@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LUMOS 로그인</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css"
+    />
+    <link rel="stylesheet" href="/static/login.css" />
+  </head>
+  <body>
+    <div class="login-shell">
+      <header class="login-header">
+        <a class="brand" href="/">
+          <strong>LUMOS</strong>
+          <span>나만을 위한 오늘의 소식</span>
+        </a>
+      </header>
+
+      <main class="login-main">
+        <div class="login-card">
+          <div class="login-head">
+            <p class="eyebrow">시작하기</p>
+            <h1>LUMOS에 로그인하세요</h1>
+            <p>관심사에 맞는 오늘의 소식을 브리핑으로 받아보세요.</p>
+          </div>
+
+          <!-- Loading (shown while config loads) -->
+          <div id="login-loading" class="login-loading">
+            <span class="spinner"></span>
+            <p>잠시만 기다려주세요.</p>
+          </div>
+
+          <!-- Main form area (hidden until config loaded) -->
+          <div id="login-form-area" class="hidden">
+            <!-- Google OAuth -->
+            <button class="google-button" id="google-login" type="button">
+              <!-- Google "G" logo -->
+              <svg class="google-icon" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 01-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+                <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/>
+                <path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
+                <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+              </svg>
+              Google로 계속하기
+            </button>
+
+            <div class="login-divider"><span>또는</span></div>
+
+            <!-- Email form -->
+            <form class="login-form" id="email-form">
+              <label class="form-group">
+                <span>이메일</span>
+                <input
+                  id="email-input"
+                  type="email"
+                  placeholder="hello@example.com"
+                  autocomplete="email"
+                  required
+                />
+              </label>
+              <p id="email-error" class="error-text" role="alert"></p>
+              <button class="button primary full" type="submit" id="email-submit">
+                이메일로 계속하기
+              </button>
+            </form>
+
+            <!-- OTP sent notice (replaces email form after send) -->
+            <div id="otp-notice" class="hidden">
+              <p class="otp-notice">
+                입력하신 이메일로 로그인 링크를 보냈어요.<br />
+                이메일을 확인하고 링크를 클릭해주세요.
+              </p>
+              <button class="back-link" id="back-to-email" type="button">
+                다른 이메일로 시도하기
+              </button>
+            </div>
+          </div>
+
+          <!-- Error when Supabase unavailable -->
+          <div id="login-error" class="hidden">
+            <p class="error-text" id="login-error-text"></p>
+          </div>
+
+          <p class="login-footer">
+            계속 진행하면
+            <a href="/terms">이용약관</a>과
+            <a href="/privacy">개인정보처리방침</a>에 동의하는 것으로
+            간주합니다.
+          </p>
+        </div>
+      </main>
+    </div>
+
+    <!-- Supabase JS SDK must load before auth.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="/static/auth.js"></script>
+    <script>
+      (async function () {
+        const loadingEl = document.getElementById("login-loading");
+        const formAreaEl = document.getElementById("login-form-area");
+        const loginErrorEl = document.getElementById("login-error");
+        const loginErrorText = document.getElementById("login-error-text");
+
+        function showError(msg) {
+          loadingEl.classList.add("hidden");
+          loginErrorText.textContent = msg;
+          loginErrorEl.classList.remove("hidden");
+        }
+
+        let config;
+        try {
+          config = await authClient.init();
+        } catch (e) {
+          showError("인증 서비스에 연결하지 못했어요. 잠시 후 다시 시도해주세요.");
+          return;
+        }
+
+        // Local mode — skip login and go straight to app
+        if (!authClient.isAuthMode()) {
+          window.location.replace("/app");
+          return;
+        }
+
+        // Already logged in — go to app
+        const session = await authClient.getSession();
+        if (session) {
+          window.location.replace("/app");
+          return;
+        }
+
+        // Show login form
+        loadingEl.classList.add("hidden");
+        formAreaEl.classList.remove("hidden");
+
+        const supabase = authClient.getClient();
+        const googleBtn = document.getElementById("google-login");
+        const emailForm = document.getElementById("email-form");
+        const emailInput = document.getElementById("email-input");
+        const emailSubmit = document.getElementById("email-submit");
+        const emailError = document.getElementById("email-error");
+        const otpNotice = document.getElementById("otp-notice");
+        const backBtn = document.getElementById("back-to-email");
+
+        // Redirect base: use configured public_base_url or current origin.
+        const appBaseUrl = authClient.getPublicBaseUrl();
+
+        // Show error message if redirected here from /app (e.g. after OAuth cancel).
+        const loginErrorParam = new URLSearchParams(window.location.search).get("error");
+        if (loginErrorParam) {
+          const errorMessages = {
+            oauth_cancel: "Google 로그인이 취소됐어요. 다시 시도해주세요.",
+          };
+          emailError.textContent = errorMessages[loginErrorParam] || "로그인 중 오류가 발생했어요. 다시 시도해주세요.";
+          history.replaceState(null, "", window.location.pathname);
+        }
+
+        // ── Google OAuth ──────────────────────────────────────────
+        googleBtn.addEventListener("click", async () => {
+          googleBtn.disabled = true;
+          googleBtn.textContent = "Google로 이동 중…";
+          const { error } = await supabase.auth.signInWithOAuth({
+            provider: "google",
+            options: { redirectTo: appBaseUrl + "/app" },
+          });
+          if (error) {
+            googleBtn.disabled = false;
+            googleBtn.innerHTML = `<svg class="google-icon" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 01-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/><path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>Google로 계속하기`;
+            emailError.textContent = "Google 로그인에 실패했어요. 다시 시도해주세요.";
+          }
+        });
+
+        // ── Email magic link ──────────────────────────────────────
+        emailForm.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const email = emailInput.value.trim();
+          if (!email) return;
+
+          emailSubmit.disabled = true;
+          emailSubmit.textContent = "보내는 중…";
+          emailError.textContent = "";
+
+          const { error } = await supabase.auth.signInWithOtp({
+            email,
+            options: { emailRedirectTo: appBaseUrl + "/app" },
+          });
+
+          if (error) {
+            emailError.textContent =
+              error.message === "Email rate limit exceeded"
+                ? "이메일 발송 횟수를 초과했어요. 잠시 후 다시 시도해주세요."
+                : "오류가 발생했어요. 다시 시도해주세요.";
+            emailSubmit.disabled = false;
+            emailSubmit.textContent = "이메일로 계속하기";
+          } else {
+            emailForm.classList.add("hidden");
+            otpNotice.classList.remove("hidden");
+          }
+        });
+
+        // ── Back to email ─────────────────────────────────────────
+        backBtn.addEventListener("click", () => {
+          otpNotice.classList.add("hidden");
+          emailForm.classList.remove("hidden");
+          emailInput.value = "";
+          emailError.textContent = "";
+          emailSubmit.disabled = false;
+          emailSubmit.textContent = "이메일로 계속하기";
+        });
+      })();
+    </script>
+  </body>
+</html>

@@ -1,14 +1,14 @@
 from typing import Any, Dict, Iterable, List
 
 from src.storage.schemas import DEFAULT_CONNECTORS
-from src.storage.sqlite_store import SQLiteStore
+from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 
 
 class OnboardingService:
     def __init__(self, store: SQLiteStore):
         self.store = store
 
-    def save(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def save(self, data: Dict[str, Any], user_id: int = DEFAULT_LOCAL_USER_ID) -> Dict[str, Any]:
         keywords = self._normalize_terms(data.get("keywords", []))
         interest_types = self._normalize_terms(data.get("interest_types", []))
         goals = self._normalize_terms(data.get("goals", []))
@@ -20,7 +20,8 @@ class OnboardingService:
                 "goals": goals,
                 "interest_types": interest_types,
                 "raw_onboarding": data,
-            }
+            },
+            user_id=user_id,
         )
 
         settings_update = {"onboarding_completed": True}
@@ -32,10 +33,10 @@ class OnboardingService:
         connectors = self._normalize_connectors(data.get("connectors", {}))
         if connectors:
             settings_update["enabled_connectors_json"] = connectors
-        settings = self.store.update_settings(settings_update)
+        settings = self.store.update_settings(settings_update, user_id=user_id)
 
         for connector_type, enabled in connectors.items():
-            self.store.update_connector(connector_type, enabled)
+            self.store.update_connector(connector_type, enabled, user_id=user_id)
 
         seed_terms = []
         seed_terms.extend(keywords)
@@ -50,13 +51,14 @@ class OnboardingService:
                 weight=max(0.5, 1.0 - index * 0.03),
                 source="onboarding",
                 evidence={"goals": goals, "role": data.get("role", "")},
+                user_id=user_id,
             )
 
         return {
             "profile": profile,
             "settings": settings,
-            "connectors": self.store.get_connectors(),
-            "interest_graph": self.store.get_interests(),
+            "connectors": self.store.get_connectors(user_id=user_id),
+            "interest_graph": self.store.get_interests(user_id=user_id),
         }
 
     def _normalize_terms(self, values: Any) -> List[str]:
@@ -79,4 +81,3 @@ class OnboardingService:
             for key in DEFAULT_CONNECTORS
             if key in connectors
         }
-

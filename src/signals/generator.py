@@ -2,7 +2,7 @@ from datetime import date
 from typing import Any, Dict, List
 
 from src.signals.korean_briefing import build_korean_briefing
-from src.storage.sqlite_store import SQLiteStore
+from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 from src.signals.identity import article_key
 from src.signals.provenance import source_metadata
 from src.sources.article_content import article_context
@@ -19,14 +19,15 @@ class SignalGenerator:
         replace_today: bool = True,
         pipeline_run_id: int = None,
         archive_reason: str = None,
+        user_id: int = DEFAULT_LOCAL_USER_ID,
     ) -> List[Dict[str, Any]]:
-        settings = self.store.get_settings()
-        profile = self.store.get_profile() or {}
-        interests = self.store.get_interests(limit=50)
+        settings = self.store.get_settings(user_id=user_id)
+        profile = self.store.get_profile(user_id=user_id) or {}
+        interests = self.store.get_interests(limit=50, user_id=user_id)
         signal_count = max(1, int(settings.get("signal_count", 3)))
 
         if replace_today:
-            self.store.archive_today_signals(reason=archive_reason)
+            self.store.archive_today_signals(reason=archive_reason, user_id=user_id)
 
         selected = []
         seen = set()
@@ -38,7 +39,7 @@ class SignalGenerator:
             selected.append(candidate)
         selected = self._diversify_interest_matches(selected)
         if not replace_today:
-            shown = {article_key(item) for item in self.store.get_today_active_signals()}
+            shown = {article_key(item) for item in self.store.get_today_active_signals(user_id=user_id)}
             selected = [item for item in selected if article_key(item) not in shown]
         active_interest_count = len({
             str(interest.get("keyword", "")).strip().casefold()
@@ -66,20 +67,27 @@ class SignalGenerator:
         primary_selected, excluded_ids = self._exclude_commercial_primary_candidates(
             primary_selected, selected, signal_count
         )
-        primary_ids = {id(candidate) for candidate in primary_selected}
+        # _exclude_commercial_primary_candidates enriches accepted candidates
+        # with article context and therefore returns copied dictionaries.  Use
+        # stable article identity here; object identity would put already shown
+        # candidates back into the reserve page.
+        primary_identities = {article_key(candidate) for candidate in primary_selected}
         reserve_candidates = [
             candidate for candidate in selected
-            if id(candidate) not in primary_ids and id(candidate) not in excluded_ids
+            if article_key(candidate) not in primary_identities and id(candidate) not in excluded_ids
         ]
         if pipeline_run_id is not None:
-            self.store.save_signal_reserves(pipeline_run_id, reserve_candidates, len(primary_selected))
+            self.store.save_signal_reserves(
+                pipeline_run_id, reserve_candidates, len(primary_selected), user_id=user_id
+            )
         generated = []
         for rank, candidate in enumerate(primary_selected, start=1):
             signal_id = self.store.create_signal(
                 self._build_signal(candidate, profile, interests, rank),
                 pipeline_run_id=pipeline_run_id,
+                user_id=user_id,
             )
-            signal = self.store.get_signal(signal_id)
+            signal = self.store.get_signal(signal_id, user_id=user_id)
             if signal:
                 generated.append(signal)
         return generated

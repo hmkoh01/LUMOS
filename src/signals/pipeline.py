@@ -7,23 +7,25 @@ from src.sources.collector_registry import CollectorRegistry
 from src.sources.collectors.base import SourceQuery
 from src.sources.query_planner import QueryPlanner
 from src.sources.router import SourceRouter
-from src.storage.sqlite_store import SQLiteStore
+from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 
 
 class SignalPipeline:
     def __init__(self, store: SQLiteStore):
         self.store = store
 
-    def preview_routes(self) -> List[Dict[str, Any]]:
-        profile, settings, connectors, interests, source_configs = self._load_context()
+    def preview_routes(self, user_id: int = DEFAULT_LOCAL_USER_ID) -> List[Dict[str, Any]]:
+        profile, settings, connectors, interests, source_configs = self._load_context(user_id=user_id)
         routes = SourceRouter().plan(profile, settings, connectors, interests, source_configs=source_configs)
         return QueryPlanner().build_queries(routes, profile, interests)
 
-    def collect_mock(self, triggered_by: str = "manual") -> Dict[str, Any]:
-        return self.collect_sources(mode="mock", triggered_by=triggered_by)
+    def collect_mock(self, triggered_by: str = "manual", user_id: int = DEFAULT_LOCAL_USER_ID) -> Dict[str, Any]:
+        return self.collect_sources(mode="mock", triggered_by=triggered_by, user_id=user_id)
 
-    def collect_sources(self, mode: str = "mock", triggered_by: str = "manual") -> Dict[str, Any]:
-        profile, settings, connectors, interests, source_configs = self._load_context()
+    def collect_sources(
+        self, mode: str = "mock", triggered_by: str = "manual", user_id: int = DEFAULT_LOCAL_USER_ID
+    ) -> Dict[str, Any]:
+        profile, settings, connectors, interests, source_configs = self._load_context(user_id=user_id)
         planned = QueryPlanner().build_queries(
             SourceRouter().plan(profile, settings, connectors, interests, source_configs=source_configs),
             profile,
@@ -37,11 +39,14 @@ class SignalPipeline:
             profile_snapshot=profile,
             interest_snapshot=interests,
             selected_sources=selected_sources,
+            user_id=user_id,
         )
 
         try:
             persisted = self.persist_routes(planned, pipeline_run_id=run_id)
-            collection = self.collect_source_items(persisted, pipeline_run_id=run_id, mode=mode)
+            collection = self.collect_source_items(
+                persisted, pipeline_run_id=run_id, mode=mode, user_id=user_id
+            )
             summary = {
                 "selected_sources": collection["selected_sources"],
                 "attempted_sources": collection["attempted_sources"],
@@ -54,10 +59,10 @@ class SignalPipeline:
                 "route_count": len(persisted),
                 "collected_item_count": len(collection["source_items"]),
             }
-            self.store.complete_pipeline_run(run_id, summary)
+            self.store.complete_pipeline_run(run_id, summary, user_id=user_id)
             return {"pipeline_run_id": run_id, **collection}
         except Exception as exc:
-            self.store.fail_pipeline_run(run_id, str(exc))
+            self.store.fail_pipeline_run(run_id, str(exc), user_id=user_id)
             raise
 
     def generate_daily_signals(
@@ -66,8 +71,9 @@ class SignalPipeline:
         triggered_by: str = "manual",
         mode: str = "mock",
         run_type: str = "signal_generation",
+        user_id: int = DEFAULT_LOCAL_USER_ID,
     ) -> Dict[str, Any]:
-        profile, settings, connectors, interests, source_configs = self._load_context()
+        profile, settings, connectors, interests, source_configs = self._load_context(user_id=user_id)
         planned = QueryPlanner().build_queries(
             SourceRouter().plan(profile, settings, connectors, interests, source_configs=source_configs),
             profile,
@@ -81,22 +87,26 @@ class SignalPipeline:
             profile_snapshot=profile,
             interest_snapshot=interests,
             selected_sources=selected_sources,
+            user_id=user_id,
         )
 
         try:
             persisted = self.persist_routes(planned, pipeline_run_id=run_id)
-            collection = self.collect_source_items(persisted, pipeline_run_id=run_id, mode=mode)
+            collection = self.collect_source_items(
+                persisted, pipeline_run_id=run_id, mode=mode, user_id=user_id
+            )
             candidates = CandidateBuilder(self.store).create_from_source_items(
                 collection["source_items"],
                 interests,
                 pipeline_run_id=run_id,
             )
-            ranked = RankingService(self.store).rank(candidates)
+            ranked = RankingService(self.store).rank(candidates, user_id=user_id)
             signals = SignalGenerator(self.store).generate_from_candidates(
                 ranked,
                 replace_today=replace_today,
                 pipeline_run_id=run_id,
                 archive_reason=f"replaced_by_run:{run_id}" if replace_today else None,
+                user_id=user_id,
             )
             signal_count = max(1, int(settings.get("signal_count", 3)))
             summary = {
@@ -115,7 +125,7 @@ class SignalPipeline:
                 "replace_today": replace_today,
                 "mode": mode,
             }
-            self.store.complete_pipeline_run(run_id, summary)
+            self.store.complete_pipeline_run(run_id, summary, user_id=user_id)
             return {
                 "pipeline_run_id": run_id,
                 "selected_sources": collection["selected_sources"],
@@ -133,7 +143,7 @@ class SignalPipeline:
                 "signals": signals,
             }
         except Exception as exc:
-            self.store.fail_pipeline_run(run_id, str(exc))
+            self.store.fail_pipeline_run(run_id, str(exc), user_id=user_id)
             raise
 
     def persist_routes(
@@ -171,17 +181,21 @@ class SignalPipeline:
         self,
         planned_routes: List[Dict[str, Any]],
         pipeline_run_id: Optional[int] = None,
+        user_id: int = DEFAULT_LOCAL_USER_ID,
     ) -> Dict[str, Any]:
-        return self.collect_source_items(planned_routes, pipeline_run_id=pipeline_run_id, mode="mock")
+        return self.collect_source_items(
+            planned_routes, pipeline_run_id=pipeline_run_id, mode="mock", user_id=user_id
+        )
 
     def collect_source_items(
         self,
         planned_routes: List[Dict[str, Any]],
         pipeline_run_id: Optional[int] = None,
         mode: str = "mock",
+        user_id: int = DEFAULT_LOCAL_USER_ID,
     ) -> Dict[str, Any]:
         registry = CollectorRegistry()
-        source_configs = self.store.get_source_configs()
+        source_configs = self.store.get_source_configs(user_id=user_id)
         config_map = {item["source_id"]: item for item in source_configs}
         raw_items = []
         errors_by_source: Dict[str, List[str]] = {}
@@ -266,10 +280,10 @@ class SignalPipeline:
                 return False
         return True
 
-    def _load_context(self):
-        profile = self.store.get_profile() or {}
-        settings = self.store.get_settings()
-        connectors = self.store.get_connectors()
-        interests = self.store.get_interests(limit=50)
-        source_configs = self.store.get_source_configs()
+    def _load_context(self, user_id: int = DEFAULT_LOCAL_USER_ID):
+        profile = self.store.get_profile(user_id=user_id) or {}
+        settings = self.store.get_settings(user_id=user_id)
+        connectors = self.store.get_connectors(user_id=user_id)
+        interests = self.store.get_interests(limit=50, user_id=user_id)
+        source_configs = self.store.get_source_configs(user_id=user_id)
         return profile, settings, connectors, interests, source_configs

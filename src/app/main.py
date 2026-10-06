@@ -1,8 +1,11 @@
+import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.routes import router
 from src.app.lifecycle import initialize_app
@@ -23,10 +26,56 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── Security headers ─────────────────────────────────────────────────────────
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add minimal security response headers to every response.
+
+    Deliberately avoids a strict CSP so that Supabase CDN scripts, Pretendard
+    fonts, and other external resources continue to work without modification.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+# ── CORS ─────────────────────────────────────────────────────────────────────
+# Rule: never combine allow_origins=["*"] with allow_credentials=True —
+# browsers reject this per the CORS spec.
+#
+# LUMOS_ALLOWED_ORIGINS (comma-separated) overrides the default in all modes.
+# Default:
+#   supabase mode  → [] (same-origin only; no cross-origin API access needed)
+#   local mode     → localhost variants for desktop/dev tooling
+
+_allowed_origins_raw = os.environ.get("LUMOS_ALLOWED_ORIGINS", "").strip()
+if _allowed_origins_raw:
+    _cors_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
+else:
+    _auth_mode = os.environ.get("LUMOS_AUTH_MODE", "local").strip().lower()
+    if _auth_mode == "supabase":
+        # Production: same-origin only.  No cross-origin API consumers expected.
+        _cors_origins = []
+    else:
+        # Local / desktop dev: allow common localhost ports.
+        _cors_origins = [
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    # credentials only when specific origins are whitelisted (never with *)
+    allow_credentials=bool(_cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,6 +96,11 @@ def health():
 @app.get("/app")
 def web_app():
     return FileResponse(WEB_STATIC_DIR / "index.html")
+
+
+@app.get("/login")
+def login_page():
+    return FileResponse(WEB_STATIC_DIR / "login.html")
 
 
 @app.get("/icon.png")

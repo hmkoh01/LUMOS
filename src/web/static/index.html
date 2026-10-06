@@ -5,39 +5,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LUMOS</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=20261005-split-chat-panel" />
+    <link rel="stylesheet" href="/static/styles.css?v=20261006-brand-link-fix" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
-        <div class="brand">
+        <a class="brand" href="/" aria-label="LUMOS 메인 페이지로 이동">
           <div>
             <h1>LUMOS</h1>
             <p>나만을 위한 오늘의 소식</p>
           </div>
-        </div>
+        </a>
           <nav class="nav-tabs" aria-label="주요 메뉴">
-            <button class="nav-item active" data-tab="signals">오늘의 소식</button>
+            <button class="nav-item active" data-tab="signals">브리핑</button>
             <button class="nav-item" data-tab="saved">저장한 소식</button>
             <button class="nav-item" data-tab="interests">내 관심사</button>
           <button class="nav-item" data-tab="sources">소스</button>
           <button class="nav-item" data-tab="activity">활동</button>
           <button class="nav-item" data-tab="settings">설정</button>
         </nav>
+        <!-- User menu — shown only in Supabase auth mode -->
+        <div class="user-menu hidden" id="user-menu">
+          <span class="user-display" id="user-display"></span>
+          <button class="button ghost" type="button" id="logout-button">로그아웃</button>
+        </div>
       </aside>
 
       <main class="content">
         <section class="view active" id="view-signals" aria-labelledby="signals-title">
           <div class="hero">
             <div>
-              <p class="eyebrow">오늘의 브리핑</p>
-              <h2 id="signals-title">오늘의 소식들</h2>
-              <button class="button secondary" id="view-saved-signals" type="button">저장한 소식들 보기</button>
+              <p class="eyebrow">PERSONAL BRIEFING</p>
+              <h2 id="signals-title">중요한 변화만, 한눈에</h2>
+              <p class="briefing-intro">선택한 관심사와 소스를 바탕으로 정리한 브리핑입니다.</p>
             </div>
             <div class="hero-actions">
               <button class="button primary" id="generate-signals">소식 새로 받기</button>
             </div>
           </div>
+          <div class="briefing-toolbar">
+            <div class="period-tabs" role="tablist" aria-label="브리핑 기간">
+              <button class="period-tab active" type="button" role="tab" aria-selected="true" data-period="today">오늘</button>
+              <button class="period-tab" type="button" role="tab" aria-selected="false" data-period="week">이번 주</button>
+              <button class="period-tab" type="button" role="tab" aria-selected="false" data-period="month">이번 달</button>
+            </div>
+            <button class="button ghost briefing-saved-link" id="view-saved-signals" type="button">저장한 소식</button>
+          </div>
+          <p class="period-description" id="period-description" aria-live="polite"></p>
           <div id="first-run-panel"></div>
           <div id="signals-list" class="stack"></div>
         </section>
@@ -357,10 +371,13 @@
       <img src="/icon.png" alt="" />
     </button>
     <aside class="chat-panel" id="chat-panel" aria-label="LUMOS 원문 대화" aria-hidden="true">
-      <header class="chat-header"><div><strong>LUMOS에게 물어보기</strong><p>추천한 원문을 바탕으로 답해드려요.</p></div><button class="chat-close" id="chat-close" type="button" aria-label="채팅 닫기">×</button></header>
-      <div class="chat-messages" id="chat-messages" aria-live="polite"><div class="chat-message assistant">오늘 추천한 원문에 대해 궁금한 점을 물어보세요.</div></div>
-      <form class="chat-form" id="chat-form"><textarea id="chat-input" rows="2" placeholder="예: 이 소식이 왜 중요한가요?"></textarea><button class="button primary" type="submit">보내기</button></form>
+      <header class="chat-header"><div><strong>LUMOS Assistant</strong><p>브리핑을 바탕으로 질문하는 공간</p></div><button class="chat-close" id="chat-close" type="button" aria-label="패널 닫기">×</button></header>
+      <div class="chat-messages" id="chat-messages" aria-live="polite"><div class="assistant-placeholder"><span>COMING SOON</span><h3>축적된 브리핑에<br />질문할 수 있게 준비 중이에요.</h3><p>다음 단계에서 개인화된 정보와 대화 맥락을 안전하게 연결합니다.</p><div class="suggested-questions"><button type="button" disabled>이번 주 가장 큰 변화는?</button><button type="button" disabled>저장한 소식 요약해 줘</button></div></div></div>
+      <form class="chat-form" id="chat-form"><textarea id="chat-input" rows="2" disabled placeholder="Assistant 준비 중"></textarea><button class="button primary" type="submit" disabled>준비 중</button></form>
     </aside>
-    <script src="/static/app.js?v=20261005-source-chat"></script>
+    <!-- Supabase JS SDK (loaded unconditionally; auth.js skips init in local mode) -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="/static/auth.js"></script>
+    <script src="/static/app.js?v=20261006-auth"></script>
   </body>
 </html>

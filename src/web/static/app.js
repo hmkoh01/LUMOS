@@ -13,10 +13,12 @@ const state = {
   signalRunId: null,
   loadingMoreSignals: false,
   activeTab: "signals",
+  briefingPeriod: "today",
   onboardingStep: 1,
   onboardingRole: "예비 창업자 / PM",
   onboardingKeywords: [],
   firstRun: false,
+  authUser: null,
   authShell: {
     mode: "local",
     plan: "로컬 MVP",
@@ -70,20 +72,35 @@ const tabToHash = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  initApp().catch(console.error);
+});
+
+async function initApp() {
   const initialScrollPosition = readStoredScrollPosition();
+
+  // Auth guard: must run before any API call.
+  // Returns false when navigating away (redirect to /login).
+  const proceed = await initAuth();
+  if (!proceed) return;
+
   initAuthShell();
   bindNavigation();
   bindTopActions();
+  bindBriefingPeriods();
   bindSourceChat();
   bindOnboarding();
   applyHashTab({ load: false });
   window.addEventListener("hashchange", applyHashTab);
   window.addEventListener("pagehide", storeScrollPosition);
-  loadInitialData().then(async () => {
-    if (state.activeTab !== "signals") await loadTab(state.activeTab);
-    restoreScrollPosition(initialScrollPosition);
-  });
-});
+
+  await loadInitialData();
+
+  // Auto-open onboarding for first-time auth users.
+  if (authClient.isAuthMode() && state.firstRun) openOnboarding();
+
+  if (state.activeTab !== "signals") await loadTab(state.activeTab);
+  restoreScrollPosition(initialScrollPosition);
+}
 
 function bindNavigation() {
   document.querySelectorAll(".nav-item").forEach((button) => {
@@ -140,6 +157,33 @@ function bindTopActions() {
   document.getElementById("setting-signal-count")?.addEventListener("change", renderSignalCountGateNote);
 }
 
+// Keep period selection at the presentation boundary: card rendering and
+// feedback actions stay independent from the period-query API.
+function bindBriefingPeriods() {
+  document.querySelectorAll("[data-period]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.briefingPeriod = button.dataset.period || "today";
+      document.querySelectorAll("[data-period]").forEach((item) => {
+        const selected = item === button;
+        item.classList.toggle("active", selected);
+        item.setAttribute("aria-selected", String(selected));
+      });
+      renderPeriodDescription();
+      loadSignals();
+    });
+  });
+  renderPeriodDescription();
+}
+
+function renderPeriodDescription() {
+  const copy = {
+    today: "오늘 포착한 변화입니다.",
+    week: "최근 7일 동안 포착한 중요한 변화입니다.",
+    month: "최근 30일 동안 쌓인 중요한 변화입니다.",
+  };
+  setText("period-description", copy[state.briefingPeriod] || copy.today);
+}
+
 function bindOnboarding() {
   document.getElementById("close-onboarding").addEventListener("click", closeOnboarding);
   document.getElementById("onboarding-prev").addEventListener("click", () => setOnboardingStep(state.onboardingStep - 1));
@@ -180,21 +224,44 @@ async function loadTab(tab) {
   if (tab === "sources") await loadSources();
   if (tab === "activity") await loadActivity();
   if (tab === "settings") {
-    await Promise.allSettled([loadSettings(), loadConnectors(), loadCloudAccountStatus(), loadFeatureGates()]);
+    const settingsPromises = [loadSettings(), loadConnectors()];
+    if (authClient.isDevMode()) {
+      settingsPromises.push(loadCloudAccountStatus(), loadFeatureGates());
+    }
+    await Promise.allSettled(settingsPromises);
     renderSettings();
   }
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
+/**
+ * apiFetch — central fetch wrapper for all /api/v1/* calls.
+ *
+ * In supabase auth mode: automatically attaches the current Bearer token.
+ * On HTTP 401 in auth mode: checks session validity and redirects to /login
+ * if the session is gone (prevents redirect loops via authClient._redirecting).
+ * In local mode: behaves identically to a plain fetch.
+ */
+async function apiFetch(path, options = {}) {
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (authClient.isAuthMode()) {
+    const token = await authClient.getAccessToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  }
+  const response = await fetch(path, { ...options, headers });
+  if (response.status === 401 && authClient.isAuthMode()) {
+    const session = await authClient.getSession();
+    if (!session) {
+      authClient.redirectToLogin();
+      throw new Error("인증이 만료됐어요. 다시 로그인해주세요.");
+    }
+  }
   if (!response.ok) throw new Error("잠시 연결이 불안정해요. 다시 시도해보세요.");
   const data = await response.json();
   if (data.success === false) throw new Error(data.error || "잠시 연결이 불안정해요. 다시 시도해보세요.");
   return data;
 }
+// Backward-compat alias used throughout this file.
+const api = apiFetch;
 
 async function loadProfile() {
   const data = await api("/api/v1/profile");
@@ -245,9 +312,10 @@ async function loadFeatureGates() {
 
 async function loadSignals(render = true, scrollPosition = render ? captureScrollPosition() : null) {
   const container = document.getElementById("signals-list");
-  if (render) showLoading("signals-list", "오늘의 소식을 불러오고 있어요.");
+  if (render) showLoading("signals-list", "브리핑을 불러오고 있어요.");
   try {
-    const data = await api("/api/v1/signals/today");
+    const period = state.briefingPeriod || "today";
+    const data = await api(`/api/v1/signals?period=${encodeURIComponent(period)}`);
     state.signals = (data.signals || []).filter((signal) => signal.status !== "archived");
     state.hasMoreSignals = Boolean(data.has_more);
     state.signalRunId = data.pipeline_run_id;
@@ -265,15 +333,21 @@ async function loadSignals(render = true, scrollPosition = render ? captureScrol
 function renderSignals() {
   const container = document.getElementById("signals-list");
   if (!state.signals.length) {
+    const labels = { today: "오늘", week: "이번 주", month: "이번 달" };
+    const periodLabel = labels[state.briefingPeriod] || labels.today;
     container.innerHTML = emptyState(
-      "아직 오늘의 소식이 없어요.",
-      "지금 새로 받아보면 관심사에 맞는 변화를 한국어로 정리해드릴게요.",
-      "소식 새로 받기",
-      "generate"
+      `${periodLabel} 브리핑은 아직 없어요.`,
+      state.briefingPeriod === "today"
+        ? "지금 새로 받아보면 관심사에 맞는 변화를 한국어로 정리해드릴게요."
+        : "이 기간에 해당하는 소식이 쌓이면 여기에서 확인할 수 있어요.",
+      state.briefingPeriod === "today" ? "소식 새로 받기" : "오늘 브리핑 보기",
+      state.briefingPeriod === "today" ? "generate" : "open-today"
     );
     bindEmptyAction("generate", () => generateSignals());
+    bindEmptyAction("open-today", () => document.querySelector('[data-period="today"]')?.click());
     return;
   }
+  renderPeriodDescription();
   container.innerHTML = state.signals.map(renderSignalCard).join("") + `
     <div class="more-signals" aria-live="polite">
       ${state.hasMoreSignals
@@ -447,14 +521,17 @@ function renderSignalCard(signal) {
       </div>
       <div class="signal-meta">
         <span class="pill">출처 ${escapeHtml(signal.source_display || "출처 미확인")}</span>
+        ${signal.collected_via ? `<span class="pill">수집 경로: ${escapeHtml(signal.collected_via)}</span>` : ""}
+        <span class="pill">${escapeHtml(formatBriefingTimestamp(signal.content_timestamp || signal.created_at || signal.updated_at))}</span>
         <span class="pill">${signal.data_kind === "mock" ? "샘플 자료 · 실제 최신 정보 아님" : signal.data_kind === "live" ? "외부 소스 수집 자료" : "수집 유형 미확인"}</span>
+        ${signal.generation_mode ? `<span class="pill">생성 당시 방식: ${escapeHtml(modeLabels[signal.generation_mode] || signal.generation_mode)}</span>` : ""}
         <span class="pill">관련도 ${confidence || 70}%</span>
         <span class="pill">관련 소스 ${sourceItems.length || 1}개</span>
         ${statusPill(signal.status)}
       </div>
       <div class="signal-body">
-        <div class="info-box"><strong>추천 이유</strong><p>${escapeHtml(reasonKo)}</p></div>
-        <div class="info-box"><strong>다음에 볼 것</strong><p>${escapeHtml(actionKo)}</p></div>
+        <div class="info-box"><strong>핵심 요약</strong><p>${escapeHtml(headlineSummaryKo)}</p></div>
+        <div class="info-box"><strong>왜 중요한지</strong><p>${escapeHtml(reasonKo)}</p></div>
       </div>
       <div class="actions">
         <button class="button secondary" data-feedback="saved">저장</button>
@@ -467,13 +544,20 @@ function renderSignalCard(signal) {
         <div class="details-content">
           <p class="detail-summary">
             <strong>원문 제목</strong> ${escapeHtml(originalTitle || "확인되지 않았어요.")}<br><br>
-            <strong>원문의 핵심</strong> ${escapeHtml(coreSummary)}<br><br>
+            <strong>내용 정리</strong> ${escapeHtml(coreSummary)}<br><br>
             <strong>알면 좋을 용어·트렌드</strong> ${escapeHtml(helpfulTermsAndTrend)}
           </p>
         </div>
       </details>
     </article>
   `;
+}
+
+function formatBriefingTimestamp(value) {
+  if (!value) return "방금 수집";
+  const date = parseServerTimestamp(value);
+  if (Number.isNaN(date.getTime())) return "수집 시점 미확인";
+  return `게시 ${date.toLocaleDateString("ko-KR", { month: "long", day: "numeric" })}`;
 }
 
 function helpfulTermsAndTrendText(signal, matchedKeywords) {
@@ -1043,6 +1127,11 @@ function renderSettings() {
 }
 
 function initAuthShell() {
+  // Hide the dev-only account card in production (supabase mode, LUMOS_DEV_MODE not set).
+  if (!authClient.isDevMode()) {
+    document.getElementById("account-shell")?.classList.add("hidden");
+  }
+
   const mockAuth = new URLSearchParams(location.search).get("mockAuth");
   if (mockAuth === "free" || mockAuth === "pro") {
     state.authShell = {
@@ -1051,6 +1140,19 @@ function initAuthShell() {
       label: mockAuth === "pro" ? "Mock Pro 계정" : "Mock Free 계정",
       isMock: true,
     };
+    return;
+  }
+  if (authClient.isAuthMode() && state.authUser) {
+    const email = state.authUser.email || "";
+    const name = state.authUser.user_metadata?.full_name || state.authUser.user_metadata?.name || email;
+    state.authShell = {
+      mode: "supabase",
+      plan: "베타",
+      label: name || "로그인됨",
+      isMock: false,
+      email,
+    };
+    renderUserMenu();
   }
 }
 
@@ -1463,4 +1565,107 @@ function appendChatMessage(role, text, sources = []) {
   const links = sources.filter((source) => source.url).map((source) => `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">원문: ${escapeHtml(source.title)}</a>`).join("");
   container.insertAdjacentHTML("beforeend", `<div class="chat-message ${role}">${escapeHtml(text)}${links ? `<div class="chat-sources">${links}</div>` : ""}</div>`);
   container.scrollTop = container.scrollHeight;
+}
+
+// ─── Auth functions ───────────────────────────────────────────────────────
+
+/**
+ * Initialize auth state at app startup.
+ * Returns true  → proceed with app initialisation.
+ * Returns false → navigating to /login (don't proceed).
+ */
+async function initAuth() {
+  try {
+    await authClient.init();
+  } catch (e) {
+    // Config fetch failed — continue in local mode (degraded).
+    console.warn("Auth init failed, running in local mode:", e);
+    return true;
+  }
+
+  if (!authClient.isAuthMode()) return true;
+
+  // Detect OAuth errors returned as query params (e.g. user cancelled Google OAuth).
+  // Supabase redirects back to /app with ?error=access_denied in this case.
+  const urlParams = new URLSearchParams(window.location.search);
+  const oauthError = urlParams.get("error");
+  if (oauthError) {
+    const reason = oauthError === "access_denied" ? "oauth_cancel" : oauthError;
+    authClient.redirectToLogin(reason);
+    return false;
+  }
+
+  const session = await authClient.getSession();
+  if (!session) {
+    authClient.redirectToLogin();
+    return false;
+  }
+
+  state.authUser = session.user;
+
+  // Redirect to /login on sign-out (e.g. token revoked in another tab).
+  authClient.onAuthStateChange((event) => {
+    if (event === "SIGNED_OUT") authClient.redirectToLogin();
+  });
+
+  return true;
+}
+
+/** Render the sidebar user menu when in Supabase auth mode. */
+function renderUserMenu() {
+  const menu = document.getElementById("user-menu");
+  if (!menu) return;
+  if (!authClient.isAuthMode() || !state.authUser) {
+    menu.classList.add("hidden");
+    return;
+  }
+  const user = state.authUser;
+  const display =
+    user.user_metadata?.full_name ||
+    user.user_metadata?.name ||
+    user.email ||
+    "사용자";
+  setText("user-display", display);
+  menu.classList.remove("hidden");
+
+  // Bind logout button once.
+  const btn = document.getElementById("logout-button");
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", handleLogout);
+  }
+}
+
+/** Sign out: clear Supabase session, reset client state, redirect to /login. */
+async function handleLogout() {
+  const btn = document.getElementById("logout-button");
+  if (btn) { btn.disabled = true; btn.textContent = "로그아웃 중…"; }
+  await authClient.signOut();
+  resetClientState();
+  window.location.href = "/login";
+}
+
+/**
+ * Reset all mutable client state so that a subsequent user login sees
+ * a clean slate (prevents data leakage between accounts).
+ */
+function resetClientState() {
+  state.profile = null;
+  state.settings = null;
+  state.connectors = [];
+  state.sources = [];
+  state.interests = [];
+  state.interestRecommendations = [];
+  state.feedbackSignals = [];
+  state.feedbackMode = null;
+  state.signals = [];
+  state.savedSignals = [];
+  state.hasMoreSignals = false;
+  state.signalRunId = null;
+  state.loadingMoreSignals = false;
+  state.firstRun = false;
+  state.authUser = null;
+  state.cloudAccount = null;
+  state.featureGates = null;
+  state.authShell = { mode: "local", plan: "로컬 MVP", label: "로컬 모드", isMock: false };
 }

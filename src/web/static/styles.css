@@ -75,6 +75,8 @@ button {
   align-items: center;
   padding: 0 16px;
   margin-bottom: 16px;
+  color: inherit;
+  text-decoration: none;
 }
 
 .chat-launcher { position: fixed; right: 28px; bottom: 28px; z-index: 20; width: 64px; height: 64px; padding: 0; overflow: hidden; border: 0; border-radius: 50%; background: var(--color-primary); box-shadow: 0 12px 28px rgba(11,42,99,.3); }
@@ -93,6 +95,32 @@ button {
 .chat-form { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--color-border); }
 .chat-form textarea { flex: 1; min-width: 0; resize: none; border: 1px solid var(--color-border); border-radius: 12px; padding: 9px; }
 .chat-form .button { align-self: flex-end; }
+
+/* ── Sidebar user menu (shown only in Supabase auth mode) ── */
+.user-menu {
+  position: absolute;
+  bottom: 28px;
+  left: 24px;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.72);
+}
+
+.user-display {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
 
 .brand-mark {
   display: grid;
@@ -121,6 +149,19 @@ button {
 .card h3,
 .card p {
   margin: 0;
+}
+
+a.brand,
+a.brand:link,
+a.brand:visited,
+a.brand:hover,
+a.brand:active,
+a.brand:focus,
+.brand h1,
+.brand p {
+  color: inherit;
+  text-decoration: none !important;
+  text-decoration-line: none !important;
 }
 
 .brand h1 {
@@ -1265,4 +1306,26 @@ input:disabled {
 .more-signals {
   padding: 20px 0;
   text-align: center;
+}
+
+/* Period briefing layer. It deliberately reuses the existing signal data and
+   feedback controls until period-specific API collections are available. */
+.briefing-intro { max-width: 610px; }
+.briefing-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; margin:0 0 10px; }
+.period-tabs { display:inline-flex; gap:4px; padding:5px; border:1px solid var(--color-border); border-radius:14px; background:rgba(255,255,255,.74); }
+.period-tab { min-height:36px; border:0; border-radius:10px; padding:0 14px; background:transparent; color:var(--color-text-muted); font-weight:800; }
+.period-tab:hover { color:var(--color-primary); }
+.period-tab.active { background:var(--color-primary); color:#fff; box-shadow:0 4px 10px rgba(11,42,99,.15); }
+.briefing-saved-link { min-height:36px; padding:0 8px; }
+.period-description { margin:0 0 18px; color:var(--color-text-muted); font-size:13px; }
+.assistant-placeholder { display:grid; align-content:center; min-height:100%; padding:10px 4px; }
+.assistant-placeholder > span { color:var(--color-accent); font-size:11px; font-weight:900; letter-spacing:.09em; }
+.assistant-placeholder h3 { margin:11px 0 0; color:var(--color-text); font-size:21px; line-height:1.35; }
+.assistant-placeholder p { margin:10px 0 0; color:var(--color-text-muted); font-size:13px; line-height:1.7; }
+.suggested-questions { display:grid; gap:8px; margin-top:20px; }
+.suggested-questions button { border:1px solid var(--color-border); border-radius:10px; padding:10px; background:#fff; color:var(--color-text-muted); text-align:left; font-size:12px; }
+.chat-form textarea:disabled, .chat-form button:disabled { cursor:not-allowed; opacity:.58; }
+
+@media (max-width: 720px) {
+  .briefing-toolbar { align-items:flex-start; flex-direction:column; }
 }

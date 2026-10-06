@@ -121,6 +121,51 @@ API만 실행:
 python run.py api
 ```
 
+### 개발 서버 실행 (자동 재시작)
+
+코드를 수정하면 서버가 자동으로 재시작되는 개발 모드:
+
+```powershell
+python run.py api --reload
+python run.py app --reload
+```
+
+`--reload`는 개발 전용입니다. 프로덕션 실행은 기존 방식(`--reload` 없음)을 유지합니다.
+
+**언제 수동 재시작이 필요한가**
+
+`--reload`는 Python 소스 파일 변경을 감지합니다. 다음 변경은 자동 반영되지 않으므로 서버를 직접 재시작해야 합니다.
+
+- 환경 변수(`.env` 등) 변경
+- static 파일 변경(`src/web/static/`, `src/web/landing/`)
+- 새 Python 패키지 설치
+
+**포트 충돌 확인 및 해결**
+
+서버가 이미 실행 중이면 `[LUMOS] Port 8000 is already in use.` 메시지가 표시됩니다.
+
+기존 프로세스 확인:
+
+```powershell
+netstat -ano | findstr :8000
+```
+
+출력된 PID로 종료:
+
+```powershell
+taskkill /PID <PID> /F
+```
+
+`<PID>` 자리에 `netstat` 결과의 실제 PID를 입력합니다. 다른 Python 프로세스에는 영향을 주지 않습니다.
+
+**서버 정상 동작 확인**
+
+```powershell
+curl http://127.0.0.1:8000/health
+```
+
+`{"status":"ok"}` 응답이 오면 정상입니다.
+
 개발용 cloud auth skeleton 실행:
 
 ```powershell

@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from src.api.dependencies import get_store
+from src.api.dependencies import CurrentUser, get_current_user, get_store
 from src.api.pipeline import collect_mock_items, collect_sources
 from src.storage.sqlite_store import SQLiteStore
 
@@ -15,8 +15,10 @@ class CollectRequest(BaseModel):
 
 
 @router.post("/collect/mock")
-def collect_mock(store: SQLiteStore = Depends(get_store)):
-    result = collect_mock_items(store)
+def collect_mock(
+    store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
+):
+    result = collect_mock_items(store, user_id=current_user.id)
     return {
         "success": True,
         "pipeline_run_id": result.get("pipeline_run_id"),
@@ -28,9 +30,13 @@ def collect_mock(store: SQLiteStore = Depends(get_store)):
 
 
 @router.post("/collect")
-def collect(request: Optional[CollectRequest] = None, store: SQLiteStore = Depends(get_store)):
+def collect(
+    request: Optional[CollectRequest] = None,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     mode = request.mode if request else "mock"
-    result = collect_sources(store, mode=mode)
+    result = collect_sources(store, mode=mode, user_id=current_user.id)
     return {
         "success": True,
         "pipeline_run_id": result.get("pipeline_run_id"),
