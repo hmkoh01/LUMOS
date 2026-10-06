@@ -75,6 +75,11 @@ class ClaudeProvider:
         context_docs: List[RetrievedContext],
         history: List[Dict[str, str]],
     ) -> str:
+        if not context_docs:
+            return (
+                "선택한 기간에 관련 브리핑 소식이 없어요. "
+                "다른 기간을 선택하거나 '소식 새로 받기'를 눌러 보세요."
+            )
         context_block = self._build_context(context_docs)
         messages = list(history)
         messages.append({

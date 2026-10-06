@@ -170,6 +170,10 @@ function bindBriefingPeriods() {
       });
       renderPeriodDescription();
       loadSignals();
+      // Reset conversation so the next Assistant message uses the new period's signals.
+      assistantState.conversationId = null;
+      assistantState.selectedSignalId = null;
+      updateChatPeriodLabel();
     });
   });
   renderPeriodDescription();
@@ -1662,6 +1666,10 @@ function clearChatMessages() {
 }
 
 function openAssistantWithSignal(signalId, signalTitle) {
+  // Cancel any in-flight request so the form doesn't stay permanently disabled.
+  if (assistantState.loading) {
+    setAssistantLoading(false);
+  }
   assistantState.conversationId = null;
   assistantState.selectedSignalId = signalId;
   clearChatMessages();
@@ -1809,4 +1817,8 @@ function resetClientState() {
   state.cloudAccount = null;
   state.featureGates = null;
   state.authShell = { mode: "local", plan: "로컬 MVP", label: "로컬 모드", isMock: false };
+  // Reset assistant chat state so a subsequent login sees a clean panel.
+  assistantState.conversationId = null;
+  assistantState.selectedSignalId = null;
+  assistantState.loading = false;
 }
