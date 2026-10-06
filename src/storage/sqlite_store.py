@@ -49,6 +49,7 @@ class SQLiteStore:
                 conn.execute(statement)
             self._ensure_defaults(conn)
             self._remove_automatically_created_interests(conn)
+            self._rebuild_fts_index(conn)
             conn.commit()
 
     def _migrate_legacy_user_ownership(self, conn: sqlite3.Connection):
@@ -1763,3 +1764,112 @@ class SQLiteStore:
                 item["payload_json"] = self.loads(item["payload_json"], {})
                 result.append(item)
             return result
+
+    # ── FTS index ─────────────────────────────────────────────────────────────
+
+    def _rebuild_fts_index(self, conn: sqlite3.Connection) -> None:
+        """Rebuild FTS5 content table from signals. Fast for small datasets; safe to repeat."""
+        try:
+            conn.execute("INSERT INTO signals_fts(signals_fts) VALUES('rebuild')")
+        except sqlite3.OperationalError:
+            pass  # FTS5 not available or not yet created
+
+    # ── Assistant: conversation storage ──────────────────────────────────────
+
+    def signal_belongs_to_user(self, signal_id: int, user_id: int) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM signals WHERE id = ? AND user_id = ?",
+                (signal_id, user_id),
+            ).fetchone()
+        return row is not None
+
+    def create_conversation(
+        self, user_id: int, period: str, title: str = ""
+    ) -> int:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO conversations (user_id, period, title) VALUES (?, ?, ?)",
+                (user_id, period, title[:200]),
+            )
+            conv_id = int(cur.lastrowid)
+            conn.commit()
+        return conv_id
+
+    def get_conversation(
+        self, conversation_id: int, user_id: int
+    ) -> Optional[Dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_conversations(
+        self, user_id: int, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.id, c.title, c.period, c.created_at, c.updated_at,
+                       COUNT(m.id) AS message_count
+                FROM conversations c
+                LEFT JOIN conversation_messages m ON m.conversation_id = c.id
+                WHERE c.user_id = ?
+                GROUP BY c.id
+                ORDER BY c.updated_at DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_conversation(self, conversation_id: int, user_id: int) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
+    def add_conversation_message(
+        self,
+        conversation_id: int,
+        role: str,
+        content: str,
+        sources_json: str = "[]",
+    ) -> int:
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO conversation_messages
+                    (conversation_id, role, content, sources_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (conversation_id, role, content, sources_json),
+            )
+            msg_id = int(cur.lastrowid)
+            conn.execute(
+                "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (conversation_id,),
+            )
+            conn.commit()
+        return msg_id
+
+    def get_conversation_messages(
+        self, conversation_id: int, user_id: int
+    ) -> List[Dict[str, Any]]:
+        if self.get_conversation(conversation_id, user_id) is None:
+            return []
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM conversation_messages
+                WHERE conversation_id = ?
+                ORDER BY created_at ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]

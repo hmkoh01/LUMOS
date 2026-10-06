@@ -90,8 +90,25 @@ button {
 .chat-message { width: fit-content; max-width: 92%; margin-bottom: 12px; padding: 11px 13px; border-radius: 14px; white-space: pre-wrap; line-height: 1.55; font-size: 14px; }
 .chat-message.assistant { background: #fff; color: var(--color-text); }
 .chat-message.user { margin-left: auto; background: var(--color-primary); color: #fff; }
+.chat-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.chat-new-btn { border: 1px solid var(--color-border); background: transparent; color: var(--color-text-muted); font-size: 12px; border-radius: 8px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+.chat-new-btn:hover { background: var(--color-surface-soft); }
+.chat-welcome { padding: 8px 0 12px; color: var(--color-text-muted); font-size: 13px; }
+.chat-suggestions { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.chat-suggestion { text-align: left; border: 1px solid var(--color-border); background: var(--color-surface); border-radius: 10px; padding: 8px 12px; font-size: 13px; color: var(--color-text); cursor: pointer; }
+.chat-suggestion:hover { background: var(--color-surface-soft); }
 .chat-sources { display: grid; gap: 6px; margin-top: 10px; }
 .chat-sources a { color: var(--color-accent); font-size: 12px; text-decoration: none; }
+.chat-citations { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
+.chat-citation { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--color-border); background: var(--color-surface-soft); text-decoration: none; color: inherit; font-size: 12px; }
+.chat-citation:hover { background: var(--color-surface); }
+.citation-source { color: var(--color-accent); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+.citation-title { color: var(--color-text); line-height: 1.4; }
+.chat-loading { display: flex; align-items: center; gap: 5px; padding: 12px 14px; }
+.chat-loading span { width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-muted); animation: chat-dot 1.2s infinite; }
+.chat-loading span:nth-child(2) { animation-delay: .2s; }
+.chat-loading span:nth-child(3) { animation-delay: .4s; }
+@keyframes chat-dot { 0%,80%,100% { transform: scale(.7); opacity:.5 } 40% { transform: scale(1); opacity:1 } }
 .chat-form { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--color-border); }
 .chat-form textarea { flex: 1; min-width: 0; resize: none; border: 1px solid var(--color-border); border-radius: 12px; padding: 9px; }
 .chat-form .button { align-self: flex-end; }

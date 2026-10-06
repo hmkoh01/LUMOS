@@ -538,6 +538,7 @@ function renderSignalCard(signal) {
         <button class="button secondary" data-feedback="ignored">관심 없음</button>
         <button class="button secondary" data-feedback="tracked">계속 추적</button>
         <button class="button primary" data-open-url="${escapeHtml(sourceUrl)}" ${sourceUrl ? "" : "disabled"}>원문 보기</button>
+        <button class="button ghost" data-ask-assistant="${signal.id}" data-signal-title="${escapeHtml(titleKo)}">Assistant에게 물어보기</button>
       </div>
       <details class="details">
         <summary>자세히 보기</summary>
@@ -637,6 +638,14 @@ function bindSignalActions(container) {
         showToast("원문을 열게요");
       }
       window.open(url, "_blank", "noopener,noreferrer");
+    });
+  });
+
+  container.querySelectorAll("[data-ask-assistant]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const signalId = parseInt(button.dataset.askAssistant, 10);
+      const title = button.dataset.signalTitle || "이 소식";
+      openAssistantWithSignal(signalId, title);
     });
   });
 }
@@ -1525,45 +1534,177 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+// ─── Assistant chat state ────────────────────────────────────────────────────
+const assistantState = {
+  conversationId: null,
+  selectedSignalId: null,
+  loading: false,
+};
+
 function bindSourceChat() {
   const launcher = document.getElementById("chat-launcher");
   const panel = document.getElementById("chat-panel");
-  const close = document.getElementById("chat-close");
+  const closeBtn = document.getElementById("chat-close");
+  const newBtn = document.getElementById("chat-new");
   const form = document.getElementById("chat-form");
   const input = document.getElementById("chat-input");
+
   const setOpen = (open) => {
     panel.classList.toggle("open", open);
     document.querySelector(".app-shell")?.classList.toggle("chat-open", open);
     launcher.classList.toggle("hidden", open);
     panel.setAttribute("aria-hidden", String(!open));
     launcher.setAttribute("aria-expanded", String(open));
-    if (open) input.focus();
+    if (open) {
+      updateChatPeriodLabel();
+      input.focus();
+    }
   };
+
   launcher.addEventListener("click", () => setOpen(!panel.classList.contains("open")));
-  close.addEventListener("click", () => setOpen(false));
+  closeBtn.addEventListener("click", () => setOpen(false));
+
+  newBtn?.addEventListener("click", () => {
+    assistantState.conversationId = null;
+    assistantState.selectedSignalId = null;
+    clearChatMessages();
+  });
+
+  // Suggestion chips
+  document.getElementById("chat-messages")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".chat-suggestion");
+    if (btn) {
+      input.value = btn.textContent.trim();
+      input.focus();
+    }
+  });
+
+  // Enter to submit (Shift+Enter = newline)
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (assistantState.loading) return;
     const message = input.value.trim();
     if (!message) return;
+
     appendChatMessage("user", message);
     input.value = "";
-    input.disabled = true;
+    setAssistantLoading(true);
+
     try {
-      const data = await api("/api/v1/chat", { method: "POST", body: JSON.stringify({ message }) });
+      const body = {
+        message,
+        period: state.briefingPeriod || "today",
+        conversation_id: assistantState.conversationId,
+        selected_signal_id: assistantState.selectedSignalId,
+      };
+      assistantState.selectedSignalId = null; // use only once
+
+      const data = await api("/api/v1/assistant/chat", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+
+      assistantState.conversationId = data.conversation_id;
       appendChatMessage("assistant", data.answer, data.sources || []);
-    } catch (error) {
+    } catch {
       appendChatMessage("assistant", "답변을 준비하지 못했어요. 잠시 후 다시 시도해 주세요.");
     } finally {
-      input.disabled = false;
-      input.focus();
+      setAssistantLoading(false);
     }
   });
 }
 
+function setAssistantLoading(loading) {
+  assistantState.loading = loading;
+  const input = document.getElementById("chat-input");
+  const submit = document.getElementById("chat-submit");
+  if (input) input.disabled = loading;
+  if (submit) submit.disabled = loading;
+  if (loading) {
+    const container = document.getElementById("chat-messages");
+    container?.insertAdjacentHTML(
+      "beforeend",
+      '<div class="chat-message assistant chat-loading" id="chat-loading-indicator"><span></span><span></span><span></span></div>'
+    );
+    container.scrollTop = container.scrollHeight;
+  } else {
+    document.getElementById("chat-loading-indicator")?.remove();
+    document.getElementById("chat-input")?.focus();
+  }
+}
+
+function updateChatPeriodLabel() {
+  const labels = { today: "오늘", week: "이번 주", month: "이번 달", all: "전체" };
+  const label = labels[state.briefingPeriod] || "이번 주";
+  const el = document.getElementById("chat-period-label");
+  if (el) el.textContent = `${label} 브리핑 기반 질문`;
+}
+
+function clearChatMessages() {
+  const container = document.getElementById("chat-messages");
+  if (!container) return;
+  container.innerHTML = `
+    <div class="chat-welcome">
+      <p>브리핑 소식을 기반으로 질문해보세요.</p>
+      <div class="chat-suggestions">
+        <button class="chat-suggestion" type="button">이번 주 가장 큰 변화는?</button>
+        <button class="chat-suggestion" type="button">저장한 소식 요약해 줘</button>
+        <button class="chat-suggestion" type="button">AI 관련 소식 정리해줘</button>
+      </div>
+    </div>`;
+}
+
+function openAssistantWithSignal(signalId, signalTitle) {
+  assistantState.conversationId = null;
+  assistantState.selectedSignalId = signalId;
+  clearChatMessages();
+
+  const panel = document.getElementById("chat-panel");
+  const launcher = document.getElementById("chat-launcher");
+  panel.classList.add("open");
+  document.querySelector(".app-shell")?.classList.add("chat-open");
+  launcher.classList.add("hidden");
+  panel.setAttribute("aria-hidden", "false");
+  launcher.setAttribute("aria-expanded", "true");
+
+  updateChatPeriodLabel();
+
+  const input = document.getElementById("chat-input");
+  if (input) {
+    input.value = `"${signalTitle}" 소식에 대해 더 자세히 알려줘`;
+    input.focus();
+  }
+}
+
 function appendChatMessage(role, text, sources = []) {
   const container = document.getElementById("chat-messages");
-  const links = sources.filter((source) => source.url).map((source) => `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">원문: ${escapeHtml(source.title)}</a>`).join("");
-  container.insertAdjacentHTML("beforeend", `<div class="chat-message ${role}">${escapeHtml(text)}${links ? `<div class="chat-sources">${links}</div>` : ""}</div>`);
+  // Remove welcome placeholder on first real message
+  container.querySelector(".chat-welcome")?.remove();
+
+  const citationHtml = sources.length
+    ? `<div class="chat-citations">${sources
+        .filter((s) => s.title)
+        .map(
+          (s) =>
+            `<a class="chat-citation" href="${escapeHtml(s.url || "")}" target="_blank" rel="noopener noreferrer" ${s.url ? "" : 'tabindex="-1" aria-disabled="true"'}>
+              <span class="citation-source">${escapeHtml(s.source_name || "출처")}</span>
+              <span class="citation-title">${escapeHtml(s.title)}</span>
+            </a>`
+        )
+        .join("")}</div>`
+    : "";
+
+  container.insertAdjacentHTML(
+    "beforeend",
+    `<div class="chat-message ${escapeHtml(role)}">${escapeHtml(text)}${citationHtml}</div>`
+  );
   container.scrollTop = container.scrollHeight;
 }
 

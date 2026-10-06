@@ -235,6 +235,61 @@ SCHEMA_STATEMENTS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_candidates_dedupe ON signal_candidates(dedupe_key)",
     "CREATE INDEX IF NOT EXISTS idx_signals_dedupe ON signals(signal_date, dedupe_key)",
     "CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started ON pipeline_runs(started_at DESC)",
+    # ── Assistant: conversations & messages ──────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL DEFAULT '',
+        period TEXT NOT NULL DEFAULT 'week',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+        content TEXT NOT NULL,
+        sources_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_conv_messages_conv ON conversation_messages(conversation_id, created_at ASC)",
+    # ── Assistant: FTS5 full-text search index on signals ────────────────────
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS signals_fts USING fts5(
+        title, summary, why_it_matters,
+        content='signals',
+        content_rowid='id',
+        tokenize='unicode61'
+    )
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS signals_fts_ai
+    AFTER INSERT ON signals BEGIN
+        INSERT INTO signals_fts(rowid, title, summary, why_it_matters)
+        VALUES (new.id, COALESCE(new.title,''), COALESCE(new.summary,''), COALESCE(new.why_it_matters,''));
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS signals_fts_au
+    AFTER UPDATE ON signals BEGIN
+        INSERT INTO signals_fts(signals_fts, rowid, title, summary, why_it_matters)
+        VALUES ('delete', old.id, COALESCE(old.title,''), COALESCE(old.summary,''), COALESCE(old.why_it_matters,''));
+        INSERT INTO signals_fts(rowid, title, summary, why_it_matters)
+        VALUES (new.id, COALESCE(new.title,''), COALESCE(new.summary,''), COALESCE(new.why_it_matters,''));
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS signals_fts_ad
+    AFTER DELETE ON signals BEGIN
+        INSERT INTO signals_fts(signals_fts, rowid, title, summary, why_it_matters)
+        VALUES ('delete', old.id, COALESCE(old.title,''), COALESCE(old.summary,''), COALESCE(old.why_it_matters,''));
+    END
+    """,
 ]
 
 

@@ -1,52 +1,193 @@
-"""Source-grounded chat for the LUMOS web UI.
+"""LUMOS Assistant API — RAG-based chat grounded in the user's own signals."""
+from typing import List, Optional
 
-This intentionally answers only from signals already selected for the user;
-it does not send personal context or source content to an external AI service.
-"""
-import re
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from src.api.dependencies import CurrentUser, get_current_user, get_store
+from src.assistant.service import AssistantService
 from src.storage.sqlite_store import SQLiteStore
 
-router = APIRouter(tags=["chat"])
+router = APIRouter(tags=["assistant"])
 
+
+# ── request / response models ─────────────────────────────────────────────────
+
+class AssistantChatRequest(BaseModel):
+    message: str
+    period: str = "week"                      # today | week | month | all
+    selected_signal_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+
+
+class CitationOut(BaseModel):
+    signal_id: int
+    title: str
+    source_name: str
+    url: str
+    published_at: Optional[str] = None
+
+
+class AssistantChatResponse(BaseModel):
+    success: bool = True
+    answer: str
+    conversation_id: int
+    message_id: int
+    sources: List[CitationOut]
+
+
+class ConversationOut(BaseModel):
+    id: int
+    title: str
+    period: str
+    message_count: int
+    created_at: str
+    updated_at: str
+
+
+class ConversationMessageOut(BaseModel):
+    id: int
+    role: str
+    content: str
+    sources: List[CitationOut]
+    created_at: str
+
+
+# ── dependency ────────────────────────────────────────────────────────────────
+
+def get_assistant_service(store: SQLiteStore = Depends(get_store)) -> AssistantService:
+    return AssistantService(store=store)
+
+
+# ── endpoints ─────────────────────────────────────────────────────────────────
+
+@router.post("/assistant/chat", response_model=AssistantChatResponse)
+def assistant_chat(
+    request: AssistantChatRequest,
+    service: AssistantService = Depends(get_assistant_service),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    message = request.message.strip()
+    if not message:
+        return AssistantChatResponse(
+            answer="궁금한 점을 입력해 주세요.",
+            conversation_id=0,
+            message_id=0,
+            sources=[],
+        )
+
+    period = request.period if request.period in {"today", "week", "month", "all"} else "week"
+
+    result = service.chat(
+        user_id=current_user.id,
+        message=message,
+        period=period,
+        selected_signal_id=request.selected_signal_id,
+        conversation_id=request.conversation_id,
+    )
+
+    return AssistantChatResponse(
+        answer=result.answer,
+        conversation_id=result.conversation_id,
+        message_id=result.message_id,
+        sources=[
+            CitationOut(
+                signal_id=c.signal_id,
+                title=c.title,
+                source_name=c.source_name,
+                url=c.url,
+                published_at=c.published_at,
+            )
+            for c in result.sources
+        ],
+    )
+
+
+@router.get("/assistant/conversations")
+def list_conversations(
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    convs = store.list_conversations(user_id=current_user.id)
+    return {
+        "success": True,
+        "conversations": [
+            ConversationOut(
+                id=c["id"],
+                title=c["title"],
+                period=c["period"],
+                message_count=c.get("message_count", 0),
+                created_at=c["created_at"],
+                updated_at=c["updated_at"],
+            ).model_dump()
+            for c in convs
+        ],
+    }
+
+
+@router.get("/assistant/conversations/{conversation_id}/messages")
+def get_conversation_messages(
+    conversation_id: int,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    import json as _json
+    msgs = store.get_conversation_messages(conversation_id, current_user.id)
+    out = []
+    for m in msgs:
+        try:
+            sources_raw = _json.loads(m.get("sources_json") or "[]")
+        except (_json.JSONDecodeError, TypeError):
+            sources_raw = []
+        out.append(
+            ConversationMessageOut(
+                id=m["id"],
+                role=m["role"],
+                content=m["content"],
+                sources=[
+                    CitationOut(
+                        signal_id=s.get("signal_id", 0),
+                        title=s.get("title", ""),
+                        source_name=s.get("source_name", ""),
+                        url=s.get("url", ""),
+                        published_at=s.get("published_at"),
+                    )
+                    for s in sources_raw
+                ],
+                created_at=m["created_at"],
+            ).model_dump()
+        )
+    return {"success": True, "messages": out}
+
+
+@router.delete("/assistant/conversations/{conversation_id}")
+def delete_conversation(
+    conversation_id: int,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    deleted = store.delete_conversation(conversation_id, current_user.id)
+    return {"success": deleted}
+
+
+# ── legacy /chat endpoint (kept for backward compat) ──────────────────────────
 
 class ChatRequest(BaseModel):
     message: str
 
 
-def _terms(value: str) -> set[str]:
-    return {term.casefold() for term in re.findall(r"[\w가-힣]{2,}", value or "")}
-
-
 @router.post("/chat")
-def chat(
+def chat_legacy(
     request: ChatRequest,
-    store: SQLiteStore = Depends(get_store),
+    service: AssistantService = Depends(get_assistant_service),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    question = request.message.strip()
-    if not question:
+    """Backward-compatible endpoint — delegates to AssistantService."""
+    message = request.message.strip()
+    if not message:
         return {"answer": "궁금한 점을 입력해 주세요.", "sources": []}
-    signals = store.get_today_signals(include_archived=False, user_id=current_user.id)
-    if not signals:
-        return {"answer": "아직 추천한 원문이 없어요. 먼저 오늘의 소식을 받아오면 그 자료를 바탕으로 함께 볼 수 있어요.", "sources": []}
-    query_terms = _terms(question)
-    scored = []
-    for signal in signals:
-        text = " ".join(str(signal.get(key) or "") for key in (
-            "display_title_ko", "headline_summary_ko", "detail_summary_ko", "original_title", "original_snippet", "summary"
-        ))
-        score = len(query_terms & _terms(text))
-        scored.append((score, signal))
-    scored.sort(key=lambda entry: entry[0], reverse=True)
-    matches = [signal for score, signal in scored if score > 0][:3] or [signal for _, signal in scored[:2]]
-    sources = [{"title": signal.get("original_title") or signal.get("display_title_ko") or signal.get("title") or "추천 원문",
-                "url": signal.get("source_url") or ""} for signal in matches]
-    summaries = [str(signal.get("detail_summary_ko") or signal.get("headline_summary_ko") or signal.get("summary") or "").strip() for signal in matches]
-    summaries = [summary for summary in summaries if summary]
-    answer = "추천한 원문을 기준으로 보면, " + (" ".join(summaries[:2]) if summaries else "아래 원문에서 세부 내용을 확인할 수 있어요.")
-    answer += " 아래 원문을 열어 맥락과 최신 내용을 함께 확인해 보세요."
-    return {"answer": answer, "sources": sources}
+    result = service.chat(user_id=current_user.id, message=message, period="week")
+    return {
+        "answer": result.answer,
+        "sources": [{"title": c.title, "url": c.url} for c in result.sources],
+    }
