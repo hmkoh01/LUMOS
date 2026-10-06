@@ -290,6 +290,18 @@ SCHEMA_STATEMENTS = [
         VALUES ('delete', old.id, COALESCE(old.title,''), COALESCE(old.summary,''), COALESCE(old.why_it_matters,''));
     END
     """,
+    # ── Beta user feedback ────────────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS beta_feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        feedback_type TEXT NOT NULL,
+        message TEXT NOT NULL,
+        context_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_beta_feedback_user ON beta_feedback(user_id, created_at DESC)",
 ]
 
 

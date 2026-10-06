@@ -1765,6 +1765,25 @@ class SQLiteStore:
                 result.append(item)
             return result
 
+    def save_beta_feedback(
+        self,
+        user_id: int,
+        feedback_type: str,
+        message: str,
+        context: dict,
+    ) -> int:
+        import json as _json
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO beta_feedback (user_id, feedback_type, message, context_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, feedback_type, message, _json.dumps(context, ensure_ascii=False)),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+
     # ── FTS index ─────────────────────────────────────────────────────────────
 
     def _rebuild_fts_index(self, conn: sqlite3.Connection) -> None:

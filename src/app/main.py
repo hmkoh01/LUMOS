@@ -95,7 +95,7 @@ def health():
 
 @app.get("/app")
 def web_app():
-    return FileResponse(WEB_STATIC_DIR / "index.html")
+    return FileResponse(WEB_STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/login")

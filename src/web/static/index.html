@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LUMOS</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=20261006-qa-fixes" />
+    <link rel="stylesheet" href="/static/styles.css?v=20261006-beta3" />
   </head>
   <body>
     <div class="app-shell">
@@ -24,6 +24,7 @@
           <button class="nav-item" data-tab="activity">활동</button>
           <button class="nav-item" data-tab="settings">설정</button>
         </nav>
+        <button class="beta-feedback-btn" type="button" id="open-beta-feedback">피드백 보내기</button>
         <!-- User menu — shown only in Supabase auth mode -->
         <div class="user-menu hidden" id="user-menu">
           <span class="user-display" id="user-display"></span>
@@ -53,6 +54,9 @@
           </div>
           <p class="period-description" id="period-description" aria-live="polite"></p>
           <div id="first-run-panel"></div>
+          <div class="generate-banner hidden" id="generate-banner" role="status" aria-live="polite">
+            <span class="spinner"></span> 새 소식을 확인하고 있어요…
+          </div>
           <div id="signals-list" class="stack"></div>
         </section>
 
@@ -396,9 +400,47 @@
         <button class="button primary" type="submit" id="chat-submit">전송</button>
       </form>
     </aside>
+    <!-- Beta feedback modal -->
+    <div class="beta-feedback-modal hidden" id="beta-feedback-modal" role="dialog" aria-modal="true" aria-labelledby="beta-feedback-title">
+      <div class="beta-feedback-card">
+        <div class="beta-feedback-head">
+          <h2 id="beta-feedback-title">피드백 보내기</h2>
+          <button class="button ghost" type="button" id="close-beta-feedback">닫기</button>
+        </div>
+        <p class="beta-feedback-desc">버그, 개선 아이디어, 사용 경험을 알려주세요. 직접 검토하고 반영할게요.</p>
+        <form id="beta-feedback-form">
+          <div class="beta-feedback-type-row">
+            <label class="beta-feedback-type-option">
+              <input type="radio" name="beta-feedback-type" value="버그" /> 버그
+            </label>
+            <label class="beta-feedback-type-option">
+              <input type="radio" name="beta-feedback-type" value="개선제안" checked /> 개선제안
+            </label>
+            <label class="beta-feedback-type-option">
+              <input type="radio" name="beta-feedback-type" value="사용성" /> 사용성
+            </label>
+            <label class="beta-feedback-type-option">
+              <input type="radio" name="beta-feedback-type" value="기타" /> 기타
+            </label>
+          </div>
+          <label class="form-group">
+            <span>내용 <span class="required">*</span></span>
+            <textarea id="beta-feedback-message" rows="4" maxlength="2000" placeholder="무엇을 경험하셨나요? 자세히 적어주실수록 도움이 돼요." required></textarea>
+          </label>
+          <p id="beta-feedback-error" class="beta-feedback-error" role="alert"></p>
+          <div class="actions">
+            <button class="button primary" type="submit" id="beta-feedback-submit">보내기</button>
+          </div>
+        </form>
+        <div class="beta-feedback-success hidden" id="beta-feedback-success">
+          <p>피드백을 보냈어요. 읽고 반영할게요!</p>
+          <button class="button secondary" type="button" id="close-beta-feedback-success">닫기</button>
+        </div>
+      </div>
+    </div>
     <!-- Supabase JS SDK (loaded unconditionally; auth.js skips init in local mode) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="/static/auth.js"></script>
-    <script src="/static/app.js?v=20261006-qa-fixes"></script>
+    <script src="/static/app.js?v=20261006-beta3"></script>
   </body>
 </html>

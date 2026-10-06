@@ -89,6 +89,7 @@ async function initApp() {
   bindBriefingPeriods();
   bindSourceChat();
   bindOnboarding();
+  bindBetaFeedback();
   applyHashTab({ load: false });
   window.addEventListener("hashchange", applyHashTab);
   window.addEventListener("pagehide", storeScrollPosition);
@@ -218,6 +219,7 @@ async function loadInitialData() {
   detectFirstRun();
   renderFirstRunPanel();
   renderSettings();
+  renderSignals();
 }
 
 async function loadTab(tab) {
@@ -471,6 +473,8 @@ async function generateSignals(triggerButton) {
   const button = triggerButton || document.getElementById("generate-signals");
   const original = button.textContent;
   setBusy(button, true, "소식을 고르는 중");
+  const banner = document.getElementById("generate-banner");
+  if (banner) banner.classList.remove("hidden");
   try {
     const mode = state.settings?.generate_mode || "hybrid";
     const data = await api("/api/v1/signals/generate", {
@@ -494,6 +498,7 @@ async function generateSignals(triggerButton) {
     showToast(error.message);
   } finally {
     setBusy(button, false, original);
+    if (banner) banner.classList.add("hidden");
   }
 }
 
@@ -1714,6 +1719,65 @@ function appendChatMessage(role, text, sources = []) {
     `<div class="chat-message ${escapeHtml(role)}">${escapeHtml(text)}${citationHtml}</div>`
   );
   container.scrollTop = container.scrollHeight;
+}
+
+// ─── Beta feedback ────────────────────────────────────────────────────────
+
+function bindBetaFeedback() {
+  document.getElementById("open-beta-feedback")?.addEventListener("click", openBetaFeedback);
+  document.getElementById("close-beta-feedback")?.addEventListener("click", closeBetaFeedback);
+  document.getElementById("close-beta-feedback-success")?.addEventListener("click", closeBetaFeedback);
+  document.getElementById("beta-feedback-form")?.addEventListener("submit", submitBetaFeedback);
+  document.getElementById("beta-feedback-modal")?.addEventListener("click", (e) => {
+    if (e.target === document.getElementById("beta-feedback-modal")) closeBetaFeedback();
+  });
+}
+
+function openBetaFeedback() {
+  const modal = document.getElementById("beta-feedback-modal");
+  const form = document.getElementById("beta-feedback-form");
+  const success = document.getElementById("beta-feedback-success");
+  const error = document.getElementById("beta-feedback-error");
+  if (!modal) return;
+  form?.classList.remove("hidden");
+  success?.classList.add("hidden");
+  if (error) error.textContent = "";
+  document.getElementById("beta-feedback-message").value = "";
+  modal.classList.remove("hidden");
+  document.getElementById("beta-feedback-message")?.focus();
+}
+
+function closeBetaFeedback() {
+  document.getElementById("beta-feedback-modal")?.classList.add("hidden");
+}
+
+async function submitBetaFeedback(event) {
+  event.preventDefault();
+  const submit = document.getElementById("beta-feedback-submit");
+  const errorEl = document.getElementById("beta-feedback-error");
+  const message = document.getElementById("beta-feedback-message")?.value.trim();
+  const feedbackType = document.querySelector("input[name='beta-feedback-type']:checked")?.value || "기타";
+
+  if (!message) {
+    if (errorEl) errorEl.textContent = "내용을 입력해 주세요.";
+    return;
+  }
+  if (errorEl) errorEl.textContent = "";
+
+  const original = submit.textContent;
+  setBusy(submit, true, "보내는 중");
+  try {
+    await api("/api/v1/beta/feedback", {
+      method: "POST",
+      body: JSON.stringify({ feedback_type: feedbackType, message }),
+    });
+    document.getElementById("beta-feedback-form")?.classList.add("hidden");
+    document.getElementById("beta-feedback-success")?.classList.remove("hidden");
+  } catch {
+    if (errorEl) errorEl.textContent = "전송에 실패했어요. 잠시 후 다시 시도해 주세요.";
+  } finally {
+    setBusy(submit, false, original);
+  }
 }
 
 // ─── Auth functions ───────────────────────────────────────────────────────

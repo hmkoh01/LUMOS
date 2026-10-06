@@ -63,10 +63,12 @@ button {
   position: sticky;
   top: 0;
   height: 100vh;
-  padding: 32px 24px;
+  padding: 32px 24px 40px;
   border-right: 1px solid rgba(229, 231, 235, 0.8);
   background: rgba(255, 255, 255, 0.64);
   backdrop-filter: blur(18px);
+  display: flex;
+  flex-direction: column;
 }
 
 .brand {
@@ -115,10 +117,6 @@ button {
 
 /* ── Sidebar user menu (shown only in Supabase auth mode) ── */
 .user-menu {
-  position: absolute;
-  bottom: 28px;
-  left: 24px;
-  right: 24px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1015,6 +1013,113 @@ textarea {
 .hidden {
   display: none !important;
 }
+
+/* ── Generate progress banner ──────────────────────────────────────────── */
+.generate-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 16px;
+  border-radius: var(--radius-small);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ── Beta feedback sidebar button ──────────────────────────────────────── */
+.beta-feedback-btn {
+  margin-top: auto;
+  margin-bottom: 12px;
+  padding: 10px 16px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+  flex-shrink: 0;
+}
+.beta-feedback-btn:hover {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  border-color: var(--color-accent);
+}
+
+/* ── Beta feedback modal ────────────────────────────────────────────────── */
+.beta-feedback-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(10px);
+}
+.beta-feedback-card {
+  width: min(480px, 100%);
+  border: 1px solid rgba(229, 231, 235, 0.9);
+  border-radius: 24px;
+  background: var(--color-surface);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.25);
+  padding: 28px;
+}
+.beta-feedback-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+.beta-feedback-head h2 { margin: 0; font-size: 20px; }
+.beta-feedback-desc {
+  margin: 0 0 20px;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.beta-feedback-type-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.beta-feedback-type-option {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 120ms, border-color 120ms;
+}
+.beta-feedback-type-option:has(input:checked) {
+  background: var(--color-primary-soft);
+  border-color: var(--color-accent);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.beta-feedback-type-option input { display: none; }
+.beta-feedback-error {
+  margin: 4px 0 8px;
+  color: var(--color-danger);
+  font-size: 13px;
+  min-height: 18px;
+}
+.beta-feedback-success {
+  text-align: center;
+  padding: 16px 0;
+  color: var(--color-success);
+  font-weight: 600;
+}
+.required { color: var(--color-danger); }
 
 .onboarding-modal {
   position: fixed;
