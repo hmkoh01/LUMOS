@@ -175,6 +175,27 @@ class TodaySignalsTest(unittest.TestCase):
         item["raw_json"]["mock"] = True
         self.assertEqual(source_metadata(item)["source_display"], "샘플 데이터")
 
+    def test_rss_fetch_limit_can_read_feeds_larger_than_one_megabyte(self):
+        payload = b"x" * (1_000_001)
+
+        class Response:
+            def read(self, size):
+                self.requested_size = size
+                return payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        response = Response()
+        with patch("src.sources.collectors.rss.urllib.request.urlopen", return_value=response):
+            text = RSSCollector()._fetch_text("https://feed.test/rss", timeout=1)
+
+        self.assertEqual(len(text), len(payload))
+        self.assertEqual(response.requested_size, RSSCollector.MAX_FEED_BYTES + 1)
+
     def test_grounded_korean_explanation_and_post_format(self):
         mapping = {"How do you evaluate AI agents?": "당신은 AI 에이전트를 어떻게 평가합니까?",
                    "We compared two tools.": "두 도구를 비교했습니다."}
@@ -214,7 +235,7 @@ class TodaySignalsTest(unittest.TestCase):
             self.assertEqual(signal["data_kind"], "mock")
             self.assertEqual(signal["generation_mode"], "mock")
 
-    def test_period_briefings_prefer_published_time_fallback_and_dedupe(self):
+    def test_period_briefings_use_korean_calendar_dates_and_dedupe(self):
         def add(title, url, confidence, published_at=None):
             signal_id = self.store.create_signal({
                 "title": title, "summary": "summary", "why_it_matters": "why",
@@ -224,27 +245,57 @@ class TodaySignalsTest(unittest.TestCase):
             })
             return signal_id
 
-        recent_id = add("today", "https://period.test/today", .4, "2026-10-06T01:00:00Z")
-        week_id = add("week", "https://period.test/week", .9, "2026-10-02T10:00:00Z")
-        month_id = add("month", "https://period.test/month", .7, "2026-09-15T10:00:00Z")
+        # 00:30 KST on the 6th: this is today even though its UTC date is the 5th.
+        recent_id = add("today", "https://period.test/today", .4, "2026-10-05T15:30:00Z")
+        week_id = add("week", "https://period.test/week", .9, "2026-10-05T10:00:00Z")
+        month_id = add("month", "https://period.test/month", .7, "2026-10-01T10:00:00Z")
         old_id = add("old", "https://period.test/old", .99, "2026-08-01T10:00:00Z")
         fallback_id = add("fallback", "https://period.test/fallback", .8)
-        duplicate_id = add("duplicate", "https://period.test/week", .95, "2026-10-02T10:00:00Z")
+        duplicate_id = add("duplicate", "https://period.test/week", .95, "2026-10-05T10:00:00Z")
         with self.store.connect() as conn:
-            conn.execute("UPDATE signals SET created_at = ? WHERE id = ?", ("2026-10-05 12:00:00", fallback_id))
+            conn.execute("UPDATE signals SET created_at = ? WHERE id = ?", ("2026-10-05 14:00:00", fallback_id))
             conn.commit()
 
+        # Tuesday, October 6, 21:00 KST.
         reference = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
         today = self.store.get_signals_for_period("today", now=reference)
         week = self.store.get_signals_for_period("week", now=reference)
         month = self.store.get_signals_for_period("month", now=reference)
 
-        self.assertEqual({item["id"] for item in today}, {recent_id, fallback_id})
-        self.assertEqual({item["id"] for item in week}, {recent_id, fallback_id, duplicate_id})
-        self.assertEqual({item["id"] for item in month}, {recent_id, month_id, fallback_id, duplicate_id})
+        self.assertEqual({item["id"] for item in today}, {recent_id})
+        self.assertEqual({item["id"] for item in week}, {fallback_id, duplicate_id})
+        self.assertEqual({item["id"] for item in month}, {month_id})
         self.assertNotIn(old_id, {item["id"] for item in month})
         self.assertEqual(len([item for item in week if item["source_url"] == "https://period.test/week"]), 1)
-        self.assertEqual(week[0]["id"], duplicate_id)
+        self.assertEqual(week[0]["id"], fallback_id)
+        self.assertTrue({item["id"] for item in today}.isdisjoint({item["id"] for item in week}))
+        self.assertTrue({item["id"] for item in today}.isdisjoint({item["id"] for item in month}))
+        self.assertTrue({item["id"] for item in week}.isdisjoint({item["id"] for item in month}))
+
+    def test_period_briefings_do_not_treat_last_month_as_this_month_or_last_week_as_this_week(self):
+        def add(title, published_at):
+            return self.store.create_signal({
+                "title": title, "summary": "summary", "why_it_matters": "why",
+                "source_url": f"https://period.test/{title}", "status": "active",
+                "metadata_json": {"briefing_version": 9, "published_at": published_at},
+            })
+
+        yesterday_id = add("yesterday", "2026-09-30T15:00:00Z")  # Oct 1, 00:00 KST
+        previous_month_id = add("previous-month", "2026-09-30T14:00:00Z")  # Sep 30, 23:00 KST
+        previous_week_id = add("previous-week", "2026-09-27T14:00:00Z")  # Sep 27, Sunday KST
+        reference = datetime(2026, 10, 1, 15, tzinfo=timezone.utc)  # Oct 2, midnight KST
+
+        self.assertEqual({item["id"] for item in self.store.get_signals_for_period("today", now=reference)}, set())
+        self.assertEqual(
+            {item["id"] for item in self.store.get_signals_for_period("week", now=reference)},
+            {yesterday_id, previous_month_id},
+        )
+        self.assertEqual(
+            {item["id"] for item in self.store.get_signals_for_period("month", now=reference)},
+            set(),
+        )
+        self.assertNotIn(previous_month_id, {item["id"] for item in self.store.get_signals_for_period("month", now=reference)})
+        self.assertNotIn(previous_week_id, {item["id"] for item in self.store.get_signals_for_period("week", now=reference)})
 
     def test_period_endpoint_and_validation(self):
         self.store.create_signal({"title": "period", "summary": "summary", "why_it_matters": "why",

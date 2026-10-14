@@ -18,7 +18,7 @@ class UserSignalScopeTest(unittest.TestCase):
             signal = {"title": "same article", "summary": "x", "why_it_matters": "x", "source_url": "https://example.test/a", "status": "active", "metadata_json": {"briefing_version": 9, "published_at": "2026-10-06T10:00:00Z"}}
             a_id = store.create_signal(signal, user_id=a)
             b_id = store.create_signal(signal, user_id=b)
-            reference = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+            reference = datetime(2026, 10, 7, 12, tzinfo=timezone.utc)
             self.assertEqual([item["id"] for item in store.get_today_signals(user_id=a)], [a_id])
             self.assertEqual([item["id"] for item in store.get_signals_for_period("week", now=reference, user_id=b)], [b_id])
             self.assertIsNone(store.get_signal(a_id, user_id=b))

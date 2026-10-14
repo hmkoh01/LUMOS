@@ -10,6 +10,10 @@ from src.storage.migrations import MIGRATION_COLUMNS, SCHEMA_STATEMENTS
 from src.storage.schemas import DEFAULT_CONNECTORS, DEFAULT_SOURCE_CONFIGS, DEFAULT_SOURCES
 
 DEFAULT_LOCAL_USER_ID = 1
+# South Korea does not observe daylight saving time.  A fixed UTC+09:00 zone
+# keeps calendar filtering available in Windows portable builds without an
+# additional IANA time-zone database dependency.
+KOREA_TIMEZONE = timezone(timedelta(hours=9), name="Asia/Seoul")
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -121,6 +125,31 @@ class SQLiteStore:
         )
         self._seed_default_connectors(conn, DEFAULT_LOCAL_USER_ID)
         self._seed_default_source_configs(conn, overwrite=False)
+        self._repair_retired_rss_urls(conn)
+
+    def _repair_retired_rss_urls(self, conn: sqlite3.Connection):
+        """Replace only the known retired LangChain RSS endpoint.
+
+        Source configuration is user-owned, so preserve all other feeds and
+        make no change when the retired URL is absent.
+        """
+        retired_url = "https://blog.langchain.com/rss/"
+        replacement_url = "https://blog.langchain.com/rss.xml"
+        rows = conn.execute(
+            "SELECT id, config_json FROM source_configs WHERE source_id = 'rss'"
+        ).fetchall()
+        for row in rows:
+            config = self.loads(row["config_json"], {})
+            urls = config.get("feed_urls")
+            if not isinstance(urls, list) or retired_url not in urls:
+                continue
+            config["feed_urls"] = list(dict.fromkeys(
+                replacement_url if url == retired_url else url for url in urls
+            ))
+            conn.execute(
+                "UPDATE source_configs SET config_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (self.dumps(config), row["id"]),
+            )
 
     def _seed_default_connectors(self, conn: sqlite3.Connection, user_id: int):
         for connector_type, enabled in DEFAULT_CONNECTORS.items():
@@ -1547,19 +1576,22 @@ class SQLiteStore:
         now: Optional[datetime] = None,
         user_id: int = DEFAULT_LOCAL_USER_ID,
     ) -> List[Dict[str, Any]]:
-        """Return non-archived signals in a rolling content-time window.
+        """Return signals published in the requested Korean calendar period.
 
-        Signal rows deliberately remain snapshots.  For a cross-briefing view we
-        prefer the original article's published timestamp, then fall back to
-        the signal creation time when provenance does not contain one.
+        A briefing date is determined from the source article's publication
+        timestamp, not from when LUMOS created its signal.  Period boundaries
+        use Asia/Seoul and do not overlap: today contains the current calendar
+        day, week contains this week's earlier days, and month contains earlier
+        days in the current month.
         """
-        window_days = {"today": 1, "week": 7, "month": 30}
-        if period not in window_days:
+        if period not in {"today", "week", "month"}:
             raise ValueError(f"Unsupported briefing period: {period}")
         reference = now or datetime.now(timezone.utc)
         if reference.tzinfo is None:
             reference = reference.replace(tzinfo=timezone.utc)
-        cutoff = reference - timedelta(days=window_days[period])
+        reference_kst = reference.astimezone(KOREA_TIMEZONE)
+        today_kst = reference_kst.date()
+        week_start_kst = today_kst - timedelta(days=today_kst.weekday())
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM signals WHERE user_id = ? AND status != 'archived'", (user_id,)
@@ -1569,20 +1601,44 @@ class SQLiteStore:
         for row in rows:
             signal = self._signal_from_row(row)
             content_time = self._signal_content_time(signal)
-            if content_time and content_time >= cutoff:
+            if content_time and self._is_in_briefing_period(
+                content_time, period, today_kst, week_start_kst
+            ):
                 signal["content_timestamp"] = content_time.isoformat().replace("+00:00", "Z")
                 candidates.append(signal)
 
-        # Highest relevance first; the source content time makes equally ranked
-        # cards deterministic and keeps newer developments at the top.
+        # Show the newest published articles first.  Relevance and ID make
+        # articles with the same publication time deterministic.
         candidates.sort(
             key=lambda signal: (
-                -float(signal.get("confidence") or 0),
                 -self._signal_content_time(signal).timestamp(),
+                -float(signal.get("confidence") or 0),
                 -int(signal.get("id") or 0),
             )
         )
         return self._dedupe_signal_articles_from_signals(candidates)
+
+    @staticmethod
+    def _is_in_briefing_period(
+        content_time: datetime,
+        period: str,
+        today_kst: date,
+        week_start_kst: date,
+    ) -> bool:
+        """Whether a publication belongs to one non-overlapping KST tab."""
+        published_date = content_time.astimezone(KOREA_TIMEZONE).date()
+        # Do not surface incorrectly future-dated source records.
+        if published_date > today_kst:
+            return False
+        if period == "today":
+            return published_date == today_kst
+        if period == "week":
+            return week_start_kst <= published_date < today_kst
+        return (
+            published_date.year == today_kst.year
+            and published_date.month == today_kst.month
+            and published_date < week_start_kst
+        )
 
     def _signal_content_time(self, signal: Dict[str, Any]) -> Optional[datetime]:
         metadata = signal.get("metadata_json") or {}

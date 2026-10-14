@@ -43,8 +43,9 @@ vm.runInContext(`
 const html = element('signals-list').innerHTML;
 assert.match(html, /출처 YouTube/);
 assert.match(html, /수집 경로: Hacker News/);
-assert.match(html, /샘플 자료 · 실제 최신 정보 아님/);
-assert.match(html, /생성 당시 방식: 혼합 모드/);
+assert.doesNotMatch(html, /샘플 자료 · 실제 최신 정보 아님/);
+assert.doesNotMatch(html, /생성 당시 방식: 혼합 모드/);
+assert.doesNotMatch(html, /관련 소스/);
 assert.match(html, /내용 정리/);
 assert.match(html, /&lt;script&gt;/);
 assert.doesNotMatch(html, /<script>/);
@@ -52,6 +53,14 @@ assert.match(html, /data-feedback="saved"/);
 assert.match(html, /https:\/\/youtu.be\/test/);
 assert.match(html, /추가 신호 보기/);
 assert.equal(typeof element('more-signals').click, 'function');
+vm.runInContext(`
+  state.signals = [{id: 10, rank: 9, title: 'Newest'}, {id: 11, rank: 2, title: 'Older'}];
+  state.hasMoreSignals = false;
+  renderSignals();
+`, context);
+assert.match(element('signals-list').innerHTML, /<div class="rank">1<\/div>/);
+assert.match(element('signals-list').innerHTML, /<div class="rank">2<\/div>/);
+vm.runInContext(`state.signals = [{id: 1, title: 'Original signal'}];`, context);
 vm.runInContext(`
   globalThis.feedbackCard = renderFeedbackSignalCard({
     id: 3, source_display: 'Hacker News', feedback_at: '2026-10-03T09:00:00',

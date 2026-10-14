@@ -29,12 +29,6 @@ const state = {
   featureGates: null,
 };
 
-const modeLabels = {
-  mock: "안정 모드",
-  hybrid: "혼합 모드",
-  live: "실제 소스 모드",
-};
-
 const sourceCopy = {
   hackernews: ["Hacker News", "개발자와 스타트업 커뮤니티에서 빠르게 반응하는 흐름을 봐요."],
   github: ["GitHub", "오픈소스 저장소의 구현 움직임과 새 프로젝트를 확인해요."],
@@ -182,9 +176,9 @@ function bindBriefingPeriods() {
 
 function renderPeriodDescription() {
   const copy = {
-    today: "오늘 포착한 변화입니다.",
-    week: "최근 7일 동안 포착한 중요한 변화입니다.",
-    month: "최근 30일 동안 쌓인 중요한 변화입니다.",
+    today: "오늘 게시된 소식입니다.",
+    week: "이번 주의 이전 날짜에 게시된 소식입니다.",
+    month: "이번 달의 이전 주에 게시된 소식입니다.",
   };
   setText("period-description", copy[state.briefingPeriod] || copy.today);
 }
@@ -267,7 +261,9 @@ async function apiFetch(path, options = {}) {
   return data;
 }
 // Backward-compat alias used throughout this file.
-const api = apiFetch;
+// Mutable for the isolated UI test harness; production code always keeps the
+// default apiFetch implementation.
+let api = apiFetch;
 
 async function loadProfile() {
   const data = await api("/api/v1/profile");
@@ -354,7 +350,7 @@ function renderSignals() {
     return;
   }
   renderPeriodDescription();
-  container.innerHTML = state.signals.map(renderSignalCard).join("") + `
+  container.innerHTML = state.signals.map((signal, index) => renderSignalCard(signal, index + 1)).join("") + `
     <div class="more-signals" aria-live="polite">
       ${state.hasMoreSignals
         ? `<button class="button secondary" id="more-signals" ${state.loadingMoreSignals ? "disabled" : ""}>${state.loadingMoreSignals ? "추가 소식을 불러오는 중…" : "추가 신호 보기"}</button>`
@@ -502,7 +498,7 @@ async function generateSignals(triggerButton) {
   }
 }
 
-function renderSignalCard(signal) {
+function renderSignalCard(signal, listRank = 1) {
   const sourceItems = signal.source_items_json || [];
   const confidence = Math.round(Number(signal.confidence || 0) * 100);
   const sourceUrl = signal.source_url || sourceItems.find((item) => item.url)?.url || "";
@@ -521,7 +517,7 @@ function renderSignalCard(signal) {
   return `
     <article class="signal-card" data-signal-id="${signal.id}">
       <div class="signal-head">
-        <div class="rank">${signal.rank || 1}</div>
+        <div class="rank">${listRank}</div>
         <div>
           <h3 class="signal-title">${escapeHtml(titleKo)}</h3>
           ${derivedFromKo ? `<p class="signal-derived-from">${escapeHtml(derivedFromKo)}</p>` : ""}
@@ -532,10 +528,7 @@ function renderSignalCard(signal) {
         <span class="pill">출처 ${escapeHtml(signal.source_display || "출처 미확인")}</span>
         ${signal.collected_via ? `<span class="pill">수집 경로: ${escapeHtml(signal.collected_via)}</span>` : ""}
         <span class="pill">${escapeHtml(formatBriefingTimestamp(signal.content_timestamp || signal.created_at || signal.updated_at))}</span>
-        <span class="pill">${signal.data_kind === "mock" ? "샘플 자료 · 실제 최신 정보 아님" : signal.data_kind === "live" ? "외부 소스 수집 자료" : "수집 유형 미확인"}</span>
-        ${signal.generation_mode ? `<span class="pill">생성 당시 방식: ${escapeHtml(modeLabels[signal.generation_mode] || signal.generation_mode)}</span>` : ""}
         <span class="pill">관련도 ${confidence || 70}%</span>
-        <span class="pill">관련 소스 ${sourceItems.length || 1}개</span>
         ${statusPill(signal.status)}
       </div>
       <div class="signal-body">

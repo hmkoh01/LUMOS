@@ -64,7 +64,7 @@ DEFAULT_SOURCE_CONFIGS = {
             "feed_urls": [
                 "https://github.blog/feed/",
                 "https://vercel.com/blog/rss.xml",
-                "https://blog.langchain.com/rss/",
+                "https://blog.langchain.com/rss.xml",
             ],
             "keywords": ["developer tools", "startup", "productivity"],
             "language": "en",

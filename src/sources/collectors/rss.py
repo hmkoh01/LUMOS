@@ -11,6 +11,9 @@ from src.context.interest_matching import matches_interest
 
 class RSSCollector(BaseCollector):
     source_id = "rss"
+    # Several official feeds exceed 1 MiB. Reading only the first MiB cuts
+    # XML in the middle of an entry and makes the whole source look malformed.
+    MAX_FEED_BYTES = 8 * 1024 * 1024
 
     def __init__(self, fetch_text: Optional[Callable[[str, float], str]] = None, timeout: float = 5.0, source_id: str = "rss"):
         self.fetch_text = fetch_text or self._fetch_text
@@ -106,7 +109,10 @@ class RSSCollector(BaseCollector):
     def _fetch_text(self, url: str, timeout: float) -> str:
         request = urllib.request.Request(url, headers={"User-Agent": "LUMOS/0.1"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read(1_000_000).decode("utf-8", errors="replace")
+            payload = response.read(self.MAX_FEED_BYTES + 1)
+        if len(payload) > self.MAX_FEED_BYTES:
+            raise ValueError(f"RSS feed exceeds {self.MAX_FEED_BYTES // (1024 * 1024)} MiB")
+        return payload.decode("utf-8", errors="replace")
 
     def _first_text(self, root: ET.Element, paths: List[str]) -> str:
         for path in paths:
