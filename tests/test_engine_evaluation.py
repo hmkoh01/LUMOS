@@ -87,10 +87,11 @@ class TestScoreCandidate(unittest.TestCase):
         self.assertGreater(sc.score_breakdown["interest_match"], 0)
 
     def test_periods_are_independent(self):
-        """Each period should produce different rankings for the same candidates."""
+        """Each period should produce different candidate sets and rankings."""
+        # ref: Oct 16 (Fri), weekly: Oct 12-18, monthly: Oct 1-31
         candidates = [
             self._make_candidate(title="Breaking: AI milestone", published="2026-10-16T09:00:00+09:00", stars=50),
-            self._make_candidate(title="Long-term trend analysis", published="2026-10-10T09:00:00+09:00", stars=5000),
+            self._make_candidate(title="Long-term trend analysis", published="2026-10-13T09:00:00+09:00", stars=5000),
         ]
         candidates[0].dedupe_key = "new"
         candidates[1].dedupe_key = "old"
@@ -99,17 +100,17 @@ class TestScoreCandidate(unittest.TestCase):
         daily = evaluate_candidates(candidates, Period.DAILY, ["AI"], config, reference_date=date(2026, 10, 16))
         weekly = evaluate_candidates(candidates, Period.WEEKLY, ["AI"], config, reference_date=date(2026, 10, 16))
 
-        # Daily should favour the recent item more
-        daily_ranks = {s.candidate.dedupe_key: s.rank for s in daily}
-        weekly_ranks = {s.candidate.dedupe_key: s.rank for s in weekly}
-        # The high-star old item should rank better in weekly
-        self.assertLessEqual(weekly_ranks.get("old", 999), daily_ranks.get("old", 999))
+        daily_keys = {s.candidate.dedupe_key for s in daily}
+        weekly_keys = {s.candidate.dedupe_key for s in weekly}
+        # Daily only has "new" (Oct 16); weekly has both (Oct 12-18)
+        self.assertEqual(daily_keys, {"new"})
+        self.assertIn("old", weekly_keys)
+        self.assertIn("new", weekly_keys)
 
 
 class TestEvaluateCandidates(unittest.TestCase):
     def test_min_threshold_filtering(self):
         config = EngineConfig()
-        config_eval = config.evaluation
         candidates = [
             RawCandidate(dedupe_key="good", title="AI", summary="Great AI project", published_at="2026-10-16T10:00:00+09:00", metrics={"stars": 100}),
             RawCandidate(dedupe_key="bad", title="", summary="", published_at="2025-01-01T00:00:00+00:00"),
@@ -117,6 +118,8 @@ class TestEvaluateCandidates(unittest.TestCase):
         results = evaluate_candidates(candidates, Period.DAILY, ["AI"], config, reference_date=date(2026, 10, 16))
         keys = {s.candidate.dedupe_key for s in results}
         self.assertIn("good", keys)
+        # "bad" is outside the daily range, so it's filtered by eligibility
+        self.assertNotIn("bad", keys)
 
     def test_ranking_order(self):
         config = EngineConfig()

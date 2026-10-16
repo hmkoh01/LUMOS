@@ -457,13 +457,19 @@ class TestPeriodIndependentEvaluation(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        """Build a diverse candidate pool for all period tests."""
+        """Build a diverse candidate pool for all period tests.
+
+        ref_date: Oct 16 (Fri)
+        Daily range:   Oct 16 only
+        Weekly range:  Oct 12 (Mon) - Oct 18 (Sun)
+        Monthly range: Oct 1 - Oct 31
+        """
         cls.ref_date = date(2026, 10, 16)  # Friday
         cls.config = EngineConfig()
         cls.interests = ["AI", "startup", "DevOps"]
 
         cls.candidates = [
-            # Very recent, high engagement, AI-related
+            # Today, high engagement, AI-related → daily + weekly + monthly
             RawCandidate(
                 dedupe_key="c-recent-hot",
                 title="AI Breakthrough Today",
@@ -472,7 +478,7 @@ class TestPeriodIndependentEvaluation(unittest.TestCase):
                 metrics={"stars": 5000, "comments": 200},
                 source="github",
             ),
-            # Recent, low engagement
+            # Today, low engagement → daily + weekly + monthly
             RawCandidate(
                 dedupe_key="c-recent-cold",
                 title="Minor DevOps Tool Update",
@@ -481,25 +487,25 @@ class TestPeriodIndependentEvaluation(unittest.TestCase):
                 metrics={"stars": 5, "comments": 1},
                 source="hackernews",
             ),
-            # 5 days old, very high engagement
+            # Mid-week (Oct 13), very high engagement → weekly + monthly (NOT daily)
             RawCandidate(
                 dedupe_key="c-week-popular",
                 title="Startup Funding Record",
                 summary="Major startup ecosystem funding round",
-                published_at="2026-10-11T12:00:00+09:00",
+                published_at="2026-10-13T12:00:00+09:00",
                 metrics={"stars": 20000, "comments": 500},
                 source="hackernews",
             ),
-            # 20 days old, extremely high engagement, strong interest match
+            # Early month (Oct 5), extreme engagement, strong match → monthly only
             RawCandidate(
                 dedupe_key="c-month-blockbuster",
                 title="AI DevOps Startup Revolution",
                 summary="AI startup transforms DevOps with new platform",
-                published_at="2026-09-26T12:00:00+09:00",
+                published_at="2026-10-05T12:00:00+09:00",
                 metrics={"stars": 50000, "comments": 1000},
                 source="github",
             ),
-            # Very old (60 days), moderate engagement
+            # Outside all ranges (Aug) → filtered out entirely
             RawCandidate(
                 dedupe_key="c-old-moderate",
                 title="General Tech Roundup",
@@ -515,8 +521,9 @@ class TestPeriodIndependentEvaluation(unittest.TestCase):
             self.candidates, Period.DAILY, self.interests,
             self.config, reference_date=self.ref_date,
         )
-        self.assertGreater(len(daily), 0)
-        # Daily favors recency: "c-recent-hot" should rank highest
+        # Daily: only Oct 16 candidates eligible (c-recent-hot, c-recent-cold)
+        daily_keys = {s.candidate.dedupe_key for s in daily}
+        self.assertEqual(daily_keys, {"c-recent-hot", "c-recent-cold"})
         self.assertEqual(daily[0].candidate.dedupe_key, "c-recent-hot")
 
     def test_weekly_scores_independently(self):
@@ -524,23 +531,24 @@ class TestPeriodIndependentEvaluation(unittest.TestCase):
             self.candidates, Period.WEEKLY, self.interests,
             self.config, reference_date=self.ref_date,
         )
-        self.assertGreater(len(weekly), 0)
-        # Weekly: engagement + interest balance
-        # "c-week-popular" and "c-recent-hot" should rank high
-        top_keys = [s.candidate.dedupe_key for s in weekly[:2]]
-        self.assertIn("c-recent-hot", top_keys)
+        # Weekly: Oct 12-18 → c-recent-hot, c-recent-cold, c-week-popular
+        weekly_keys = {s.candidate.dedupe_key for s in weekly}
+        self.assertEqual(weekly_keys, {"c-recent-hot", "c-recent-cold", "c-week-popular"})
+        self.assertNotIn("c-month-blockbuster", weekly_keys)
 
     def test_monthly_scores_independently(self):
         monthly = evaluate_candidates(
             self.candidates, Period.MONTHLY, self.interests,
             self.config, reference_date=self.ref_date,
         )
-        self.assertGreater(len(monthly), 0)
-        # Monthly: interest_match 0.50, engagement 0.40
-        # "c-month-blockbuster" matches all 3 interests + massive engagement
+        # Monthly: Oct 1-31 → all except c-old-moderate (Aug)
+        monthly_keys = {s.candidate.dedupe_key for s in monthly}
+        self.assertIn("c-month-blockbuster", monthly_keys)
+        self.assertNotIn("c-old-moderate", monthly_keys)
+        # c-month-blockbuster: highest engagement + best interest match
         self.assertEqual(monthly[0].candidate.dedupe_key, "c-month-blockbuster")
 
-    def test_periods_produce_different_rankings(self):
+    def test_periods_produce_different_candidate_sets(self):
         daily = evaluate_candidates(
             self.candidates, Period.DAILY, self.interests,
             self.config, reference_date=self.ref_date,
@@ -553,14 +561,17 @@ class TestPeriodIndependentEvaluation(unittest.TestCase):
             self.candidates, Period.MONTHLY, self.interests,
             self.config, reference_date=self.ref_date,
         )
-        d_order = [s.candidate.dedupe_key for s in daily]
-        w_order = [s.candidate.dedupe_key for s in weekly]
-        m_order = [s.candidate.dedupe_key for s in monthly]
-        # Rankings should differ across periods
-        self.assertNotEqual(d_order, m_order, "Daily and monthly should rank differently")
+        d_keys = {s.candidate.dedupe_key for s in daily}
+        w_keys = {s.candidate.dedupe_key for s in weekly}
+        m_keys = {s.candidate.dedupe_key for s in monthly}
+        # Each period has a different eligible set
+        self.assertEqual(len(d_keys), 2)  # daily: 2
+        self.assertEqual(len(w_keys), 3)  # weekly: 3
+        self.assertEqual(len(m_keys), 4)  # monthly: 4
+        self.assertNotEqual(d_keys, m_keys)
 
-    def test_daily_excluded_remains_weekly_candidate(self):
-        """Items outside daily range still appear in weekly/monthly."""
+    def test_daily_ineligible_remains_weekly_candidate(self):
+        """Items outside daily range are eligible for wider periods."""
         daily = evaluate_candidates(
             self.candidates, Period.DAILY, self.interests,
             self.config, reference_date=self.ref_date,
@@ -569,9 +580,10 @@ class TestPeriodIndependentEvaluation(unittest.TestCase):
             self.candidates, Period.WEEKLY, self.interests,
             self.config, reference_date=self.ref_date,
         )
-        daily_keys = {s.candidate.dedupe_key for s in daily if s.importance_score > 0}
-        weekly_keys = {s.candidate.dedupe_key for s in weekly if s.importance_score > 0}
-        # "c-week-popular" (5 days old) should have 0 recency in daily but score in weekly
+        daily_keys = {s.candidate.dedupe_key for s in daily}
+        weekly_keys = {s.candidate.dedupe_key for s in weekly}
+        # c-week-popular (Oct 13) not in daily (Oct 16 only), but in weekly (Oct 12-18)
+        self.assertNotIn("c-week-popular", daily_keys)
         self.assertIn("c-week-popular", weekly_keys)
 
     def test_score_breakdown_has_correct_components(self):
@@ -597,8 +609,8 @@ class TestPeriodIndependentEvaluation(unittest.TestCase):
                                    msg=f"Weights for {period} don't sum to 1.0")
 
     def test_independent_scores_differ_numerically(self):
-        """Same candidate gets different numeric scores per period."""
-        c = self.candidates[0]  # c-recent-hot
+        """Same candidate gets different numeric scores per period due to different weights."""
+        c = self.candidates[0]  # c-recent-hot (Oct 16, eligible for all)
         d_start, d_end = period_range(Period.DAILY, self.ref_date)
         w_start, w_end = period_range(Period.WEEKLY, self.ref_date)
         m_start, m_end = period_range(Period.MONTHLY, self.ref_date)
@@ -607,9 +619,18 @@ class TestPeriodIndependentEvaluation(unittest.TestCase):
         w_sc = score_candidate(c, Period.WEEKLY, w_start, w_end, self.interests)
         m_sc = score_candidate(c, Period.MONTHLY, m_start, m_end, self.interests)
 
-        # Scores must differ because weights differ
+        # Scores must differ because weights and date spans differ
         self.assertNotEqual(d_sc.importance_score, w_sc.importance_score)
         self.assertNotEqual(w_sc.importance_score, m_sc.importance_score)
+
+    def test_out_of_all_ranges_filtered(self):
+        """Items outside all period ranges are filtered out entirely."""
+        monthly = evaluate_candidates(
+            self.candidates, Period.MONTHLY, self.interests,
+            self.config, reference_date=self.ref_date,
+        )
+        monthly_keys = {s.candidate.dedupe_key for s in monthly}
+        self.assertNotIn("c-old-moderate", monthly_keys, "Aug item should not appear in Oct monthly")
 
 
 # ============================================================================

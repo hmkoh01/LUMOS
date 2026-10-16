@@ -140,22 +140,30 @@ class TestIndependentPeriodEvaluation(unittest.TestCase):
     def test_same_candidates_different_rankings(self):
         from datetime import date
         config = EngineConfig()
+        # ref: Oct 16 (Fri), weekly: Oct 12-18, monthly: Oct 1-31
         candidates = [
             RawCandidate(dedupe_key="recent", title="AI", published_at="2026-10-16T09:00:00+09:00", metrics={"stars": 50}),
-            RawCandidate(dedupe_key="popular", title="AI", published_at="2026-10-10T09:00:00+09:00", metrics={"stars": 5000}),
+            RawCandidate(dedupe_key="mid-week", title="AI", published_at="2026-10-14T09:00:00+09:00", metrics={"stars": 5000}),
+            RawCandidate(dedupe_key="early-month", title="AI", published_at="2026-10-05T09:00:00+09:00", metrics={"stars": 8000}),
         ]
 
         daily = evaluate_candidates(candidates, Period.DAILY, ["AI"], config, reference_date=date(2026, 10, 16))
         weekly = evaluate_candidates(candidates, Period.WEEKLY, ["AI"], config, reference_date=date(2026, 10, 16))
         monthly = evaluate_candidates(candidates, Period.MONTHLY, ["AI"], config, reference_date=date(2026, 10, 16))
 
-        d_scores = {s.candidate.dedupe_key: s.importance_score for s in daily}
-        w_scores = {s.candidate.dedupe_key: s.importance_score for s in weekly}
-        m_scores = {s.candidate.dedupe_key: s.importance_score for s in monthly}
+        d_keys = {s.candidate.dedupe_key for s in daily}
+        w_keys = {s.candidate.dedupe_key for s in weekly}
+        m_keys = {s.candidate.dedupe_key for s in monthly}
 
-        # Weekly is NOT daily aggregated — different scores
-        self.assertNotEqual(d_scores, w_scores)
-        self.assertNotEqual(w_scores, m_scores)
+        # Daily: only "recent" (Oct 16)
+        # Weekly: "recent" + "mid-week" (Oct 12-18)
+        # Monthly: all three (Oct 1-31)
+        self.assertEqual(d_keys, {"recent"})
+        self.assertEqual(w_keys, {"recent", "mid-week"})
+        self.assertEqual(m_keys, {"recent", "mid-week", "early-month"})
+        # Different candidate sets → different results
+        self.assertNotEqual(d_keys, w_keys)
+        self.assertNotEqual(w_keys, m_keys)
 
 
 class TestKoreanSummaryReuse(unittest.TestCase):

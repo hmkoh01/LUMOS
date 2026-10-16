@@ -25,8 +25,23 @@ def _parse_date(d: Optional[str]) -> Optional[date]:
         return None
 
 
+def is_within_period(published_at: Optional[str], ref_start: date, ref_end: date) -> Optional[bool]:
+    """Check if a candidate's publication date falls within the period range.
+
+    Returns True/False for known dates, None for unknown dates.
+    Unknown dates are treated as eligible (cannot prove ineligible).
+    """
+    pub = _parse_date(published_at)
+    if pub is None:
+        return None  # unknown — cannot determine eligibility
+    return ref_start <= pub <= ref_end
+
+
 def _recency_score(published: Optional[str], ref_start: date, ref_end: date) -> float:
-    """Higher score for items published closer to the end of the period."""
+    """Higher score for items published closer to the end of the period.
+
+    Only called for candidates already confirmed eligible for this period.
+    """
     pub = _parse_date(published)
     if pub is None:
         return 0.3  # unknown date gets a small default
@@ -124,6 +139,12 @@ def evaluate_candidates(
 ) -> List[ScoredCandidate]:
     """Score and rank all candidates for a period.
 
+    Two-step process:
+    1. **Eligibility**: Only candidates published within the period's date
+       range are eligible.  Candidates with unknown dates are kept (cannot
+       prove ineligible).
+    2. **Importance**: Eligible candidates are scored and ranked.
+
     Returns scored candidates sorted by descending importance, limited
     to the configured candidate cap for this period.
     """
@@ -135,9 +156,17 @@ def evaluate_candidates(
     }
     limit = limit_map.get(period, 100)
 
+    # Step 1: Eligibility filter — only candidates within the date range
+    eligible = []
+    for c in candidates:
+        within = is_within_period(c.published_at, ref_start, ref_end)
+        if within is None or within:
+            eligible.append(c)
+
+    # Step 2: Score eligible candidates
     scored = [
         score_candidate(c, period, ref_start, ref_end, user_interests)
-        for c in candidates
+        for c in eligible
     ]
     # Filter below minimum threshold
     scored = [s for s in scored if s.importance_score >= config.evaluation.min_importance_score]
