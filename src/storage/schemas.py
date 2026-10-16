@@ -119,4 +119,36 @@ DEFAULT_SOURCE_CONFIGS = {
         "priority": 37,
         "config_json": {"keywords": ["research", "agents"], "collector": "placeholder"},
     },
+    # Pilot sources are intentionally seeded as auto but cannot be collected
+    # until their redistribution and AI-processing terms are confirmed.
+    "geeknews": {
+        "enabled": False,
+        "display_name": "GeekNews",
+        "priority": 62,
+        "config_json": {
+            "feed_urls": ["https://news.hada.io/rss/news"],
+            "language": "ko", "source_region": "domestic", "content_type": "community",
+            "collector": "rss", "usage_status": "permission_review",
+        },
+    },
+    "kisa_press": {
+        "enabled": False,
+        "display_name": "KISA 보도자료",
+        "priority": 68,
+        "config_json": {
+            "feed_urls": ["https://kisa.or.kr/rss/402"],
+            "language": "ko", "source_region": "domestic", "content_type": "official_announcement",
+            "collector": "rss", "usage_status": "permission_review",
+        },
+    },
+    "kisa_research": {
+        "enabled": False,
+        "display_name": "KISA 연구보고서",
+        "priority": 68,
+        "config_json": {
+            "feed_urls": ["https://kisa.or.kr/rss/201"],
+            "language": "ko", "source_region": "domestic", "content_type": "research_report",
+            "collector": "rss", "usage_status": "permission_review",
+        },
+    },
 }

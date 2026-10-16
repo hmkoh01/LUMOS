@@ -7,6 +7,7 @@ from src.sources.collector_registry import CollectorRegistry
 from src.sources.collectors.base import SourceQuery
 from src.sources.query_planner import QueryPlanner
 from src.sources.router import SourceRouter
+from src.sources.source_registry import source_availability
 from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 
 
@@ -209,6 +210,11 @@ class SignalPipeline:
 
         for route in planned_routes:
             source = route["source"]
+            availability = source_availability(source, config_map.get(source, {}).get("config_json", {}))
+            if not availability["available"]:
+                skipped_sources.append(source)
+                errors_by_source.setdefault(source, []).append(availability["reason"])
+                continue
             if self._missing_required_source_config(source, route, mode):
                 missing_config_sources.append(source)
             attempted_sources.append(source)

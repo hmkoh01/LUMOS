@@ -5,10 +5,8 @@ from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 
 
 FEEDBACK_DELTAS = {
-    "saved": 0.5,
     "tracked": 1.0,
     "ignored": -0.5,
-    "opened": 0.2,
 }
 
 

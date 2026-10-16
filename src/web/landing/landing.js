@@ -73,3 +73,58 @@ function showLandingToast(message) {
     toast.style.opacity = "0";
   }, 2600);
 }
+
+document.addEventListener("DOMContentLoaded", () => {
+  renderLandingAccount().catch(() => {});
+});
+
+async function renderLandingAccount() {
+  if (typeof authClient === "undefined") return;
+  await authClient.init();
+  if (!authClient.isAuthMode()) return;
+  const user = (await authClient.getSession())?.user;
+  if (!user) return;
+  const actions = document.getElementById("landing-auth-actions");
+  if (!actions) return;
+  const name = user.user_metadata?.full_name || user.user_metadata?.name || user.email || "내 계정";
+  const initial = String(name).trim().slice(0, 1).toUpperCase();
+  const safeName = escapeLandingHtml(name);
+  actions.innerHTML = `<div class="landing-account-menu">
+    <button class="landing-account-trigger" type="button" aria-expanded="false" aria-controls="landing-account-popover">
+      <span class="landing-avatar" aria-hidden="true">${escapeLandingHtml(initial)}</span><span class="landing-account-name">${safeName}</span>
+    </button>
+    <div class="landing-account-popover" id="landing-account-popover" hidden>
+      <div class="landing-account-summary"><strong>${safeName}</strong><small>${escapeLandingHtml(user.email || "")}</small></div>
+      <a href="/app#settings">내 계정 설정</a>
+      <button type="button" data-landing-logout>로그아웃</button>
+    </div>
+  </div><a class="landing-briefing-button" href="/app">내 브리핑 <span aria-hidden="true">→</span></a>`;
+  const trigger = actions.querySelector(".landing-account-trigger");
+  const popover = actions.querySelector(".landing-account-popover");
+  trigger?.addEventListener("click", () => {
+    const opening = popover.hidden;
+    popover.hidden = !opening;
+    trigger.setAttribute("aria-expanded", String(opening));
+  });
+  document.addEventListener("click", (event) => {
+    if (!actions.contains(event.target)) {
+      popover.hidden = true;
+      trigger?.setAttribute("aria-expanded", "false");
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      popover.hidden = true;
+      trigger?.setAttribute("aria-expanded", "false");
+      trigger?.focus();
+    }
+  });
+  actions.querySelector("[data-landing-logout]")?.addEventListener("click", async () => {
+    await authClient.signOut();
+    window.location.assign("/");
+  });
+}
+
+function escapeLandingHtml(value) {
+  return String(value || "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
+}

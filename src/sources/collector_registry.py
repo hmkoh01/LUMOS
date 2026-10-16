@@ -8,7 +8,7 @@ from src.sources.collectors.rss import RSSCollector
 from src.sources.collectors.youtube import YouTubeCollector
 
 
-RSS_BACKED_SOURCES = {"rss", "official_ai_blogs", "company_newsroom"}
+RSS_BACKED_SOURCES = {"rss", "official_ai_blogs", "company_newsroom", "geeknews", "kisa_press", "kisa_research"}
 IMPLEMENTED_SOURCES = {"mock", "hackernews", "github", "youtube", *RSS_BACKED_SOURCES}
 PLACEHOLDER_SOURCES = {
     "producthunt",

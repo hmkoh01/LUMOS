@@ -168,6 +168,12 @@ logs/
 temp/
 tmp/
 *.tmp
+/tmp*.py
+
+# Local browser QA profiles
+/.chrome-cdp-qa/
+/.edge-assets-qa/
+/.edge-qa/
 
 # Cache files
 cache/

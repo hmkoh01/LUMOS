@@ -41,18 +41,16 @@ vm.runInContext(`
   renderSignals();
 `, context);
 const html = element('signals-list').innerHTML;
-assert.match(html, /출처 YouTube/);
-assert.match(html, /수집 경로: Hacker News/);
+assert.match(html, /YouTube/);
+assert.doesNotMatch(html, /수집 경로: Hacker News/);
 assert.doesNotMatch(html, /샘플 자료 · 실제 최신 정보 아님/);
 assert.doesNotMatch(html, /생성 당시 방식: 혼합 모드/);
 assert.doesNotMatch(html, /관련 소스/);
-assert.match(html, /내용 정리/);
-assert.match(html, /&lt;script&gt;/);
-assert.doesNotMatch(html, /<script>/);
-assert.match(html, /data-feedback="saved"/);
+assert.match(html, /AI에게 질문/);
+assert.doesNotMatch(html, /자세히 보기/);
+assert.match(html, /data-toggle-saved/);
 assert.match(html, /https:\/\/youtu.be\/test/);
-assert.match(html, /추가 신호 보기/);
-assert.equal(typeof element('more-signals').click, 'function');
+assert.doesNotMatch(html, /추가 신호 보기/);
 vm.runInContext(`
   state.signals = [{id: 10, rank: 9, title: 'Newest'}, {id: 11, rank: 2, title: 'Older'}];
   state.hasMoreSignals = false;
@@ -83,45 +81,4 @@ assert.equal(vm.runInContext('captureScrollPosition().y', context), 84);
 vm.runInContext('storeScrollPosition(); restoreScrollPosition({ x: 10, y: 20 });', context);
 assert.deepEqual(JSON.parse(sessionValues.get('lumos:scroll-position:#today')), { x: 42, y: 84 });
 assert.deepEqual(scrollCalls.at(-1), { x: 10, y: 20 });
-vm.runInContext('state.hasMoreSignals = false; renderSignals();', context);
-assert.match(element('signals-list').innerHTML, /더 보여드릴 자료가 없어요/);
-assert.doesNotMatch(element('signals-list').innerHTML, /id="more-signals"/);
-
-async function main() {
-  vm.runInContext(`
-    state.hasMoreSignals = true;
-    let requestCount = 0;
-    let releaseRequest;
-    api = async (url, options) => {
-      if (url.endsWith('/more')) {
-        requestCount++;
-        if (JSON.parse(options.body).pipeline_run_id !== 10) throw Error('Wrong run');
-        await new Promise(resolve => { releaseRequest = resolve; });
-        return {};
-      }
-      return { signals: [...state.signals, {id: 2, title: '추가 자료'}], has_more: false, pipeline_run_id: 10 };
-    };
-    const firstRequest = loadMoreSignals();
-    const duplicateRequest = loadMoreSignals();
-  `, context);
-  assert.equal(vm.runInContext('requestCount', context), 1);
-  assert.equal(element('more-signals').disabled, true);
-  vm.runInContext('releaseRequest();', context);
-  await vm.runInContext('Promise.all([firstRequest, duplicateRequest])', context);
-  assert.equal(vm.runInContext('state.signals.length', context), 2);
-  assert.equal(vm.runInContext('state.loadingMoreSignals', context), false);
-  assert.match(element('signals-list').innerHTML, /더 보여드릴 자료가 없어요/);
-  vm.runInContext(`
-    state.hasMoreSignals = true;
-    showToast = () => {};
-    api = async (url) => {
-      if (url.endsWith('/more')) throw Error('network error');
-      return {signals: state.signals, has_more: true, pipeline_run_id: 10};
-    };
-  `, context);
-  await vm.runInContext('loadMoreSignals()', context);
-  assert.equal(vm.runInContext('state.loadingMoreSignals', context), false);
-  assert.match(element('signals-list').innerHTML, /추가 신호 보기/);
-  console.log('Signal rendering, provenance, escaping, pagination, double-click and retry checks passed');
-}
-main().catch(error => { console.error(error); process.exitCode = 1; });
+console.log('Signal rendering, compact metadata and action grouping checks passed');

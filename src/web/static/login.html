@@ -120,14 +120,14 @@
 
         // Local mode — skip login and go straight to app
         if (!authClient.isAuthMode()) {
-          window.location.replace("/app");
+          window.location.replace("/");
           return;
         }
 
         // Already logged in — go to app
         const session = await authClient.getSession();
         if (session) {
-          window.location.replace("/app");
+          window.location.replace("/");
           return;
         }
 
@@ -163,7 +163,7 @@
           googleBtn.textContent = "Google로 이동 중…";
           const { error } = await supabase.auth.signInWithOAuth({
             provider: "google",
-            options: { redirectTo: appBaseUrl + "/app" },
+            options: { redirectTo: appBaseUrl + "/" },
           });
           if (error) {
             googleBtn.disabled = false;
@@ -184,7 +184,7 @@
 
           const { error } = await supabase.auth.signInWithOtp({
             email,
-            options: { emailRedirectTo: appBaseUrl + "/app" },
+            options: { emailRedirectTo: appBaseUrl + "/" },
           });
 
           if (error) {

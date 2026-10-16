@@ -100,17 +100,23 @@ def web_app():
 
 @app.get("/login")
 def login_page():
-    return FileResponse(WEB_STATIC_DIR / "login.html")
+    # Authentication redirect targets must not serve a stale login script.
+    return FileResponse(WEB_STATIC_DIR / "login.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/icon.png")
 def chat_icon():
-    return FileResponse(bundled_root() / "icon.png")
+    return FileResponse(bundled_root() / "icon.png", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/logo.png")
+def product_logo():
+    return FileResponse(bundled_root() / "logo.png", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/")
 def landing_home():
-    return FileResponse(WEB_LANDING_DIR / "index.html")
+    return FileResponse(WEB_LANDING_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/pricing")

@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -13,6 +13,7 @@ class SettingsUpdate(BaseModel):
     generate_mode: Optional[str] = None
     max_interest_keywords: Optional[int] = Field(default=None, ge=1)
     mode_enabled: Optional[bool] = None
+    source_region_preference: Optional[str] = None
 
 
 class OnboardingRequest(BaseModel):
@@ -34,3 +35,11 @@ class ConnectorUpdate(BaseModel):
 class FeedbackRequest(BaseModel):
     event_type: str
     payload: Optional[Dict[str, Any]] = None
+
+
+class SavedSignalUpdate(BaseModel):
+    saved: bool
+
+
+class RecommendationPreferenceUpdate(BaseModel):
+    preference: Optional[Literal["tracked", "ignored"]] = None

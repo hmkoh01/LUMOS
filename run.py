@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import os
 import socket
 import sys
 import threading
@@ -8,10 +9,11 @@ import webbrowser
 
 import uvicorn
 
-# Python 3.9 on Windows: socket.socketpair() is a pure-Python fallback that
-# exhausts handles after heavy test runs.  The SelectorEventLoop uses a different
-# mechanism and avoids the issue entirely.
-if sys.platform == "win32":
+# Windows' default ProactorEventLoop is the safe choice for the application.
+# The selector policy relies on socket.socketpair(), whose Python 3.9 fallback
+# can fail on some Anaconda Windows installations (WinError 10014).  Retain an
+# explicit opt-in for legacy debugging only.
+if sys.platform == "win32" and os.environ.get("LUMOS_USE_SELECTOR_LOOP", "").lower() == "true":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Load .env file before any src imports so env vars are available at import time.

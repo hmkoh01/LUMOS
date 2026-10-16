@@ -1,5 +1,6 @@
 import json
 import hashlib
+import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -49,6 +50,8 @@ class SQLiteStore:
                         raise
             self._migrate_legacy_user_ownership(conn)
             self._apply_column_migrations(conn)
+            self._migrate_legacy_signal_preferences(conn)
+            self._migrate_source_selection_modes(conn)
             for statement in deferred_statements:
                 conn.execute(statement)
             self._ensure_defaults(conn)
@@ -112,6 +115,54 @@ class SQLiteStore:
                 if column not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
+    def _migrate_legacy_signal_preferences(self, conn: sqlite3.Connection):
+        """Materialize legacy feedback without changing its historical rows or signal status.
+
+        Older versions stored one of saved/tracked/ignored in ``signals.status``.
+        The preference table lets new code keep saving and recommendation controls
+        independent, while the existing status and event history remain intact.
+        """
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO signal_preferences
+                (user_id, signal_id, saved, recommendation_preference, saved_at, preference_updated_at)
+            SELECT
+                s.user_id,
+                s.id,
+                CASE WHEN s.status = 'saved' OR EXISTS (
+                    SELECT 1 FROM feedback_events saved_event
+                    WHERE saved_event.signal_id = s.id
+                      AND saved_event.user_id = s.user_id
+                      AND saved_event.event_type = 'saved'
+                ) THEN 1 ELSE 0 END,
+                COALESCE(
+                    (SELECT recent.event_type FROM feedback_events recent
+                     WHERE recent.signal_id = s.id
+                       AND recent.user_id = s.user_id
+                       AND recent.event_type IN ('tracked', 'ignored')
+                     ORDER BY recent.id DESC LIMIT 1),
+                    CASE WHEN s.status IN ('tracked', 'ignored') THEN s.status END
+                ),
+                (SELECT MAX(saved_event.created_at) FROM feedback_events saved_event
+                 WHERE saved_event.signal_id = s.id
+                   AND saved_event.user_id = s.user_id
+                   AND saved_event.event_type = 'saved'),
+                (SELECT recent.created_at FROM feedback_events recent
+                 WHERE recent.signal_id = s.id
+                   AND recent.user_id = s.user_id
+                   AND recent.event_type IN ('tracked', 'ignored')
+                 ORDER BY recent.id DESC LIMIT 1)
+            FROM signals s
+            WHERE s.status IN ('saved', 'tracked', 'ignored')
+               OR EXISTS (
+                    SELECT 1 FROM feedback_events event
+                    WHERE event.signal_id = s.id
+                      AND event.user_id = s.user_id
+                      AND event.event_type IN ('saved', 'tracked', 'ignored')
+               )
+            """
+        )
+
     def _ensure_defaults(self, conn: sqlite3.Connection):
         conn.execute(
             """
@@ -126,6 +177,16 @@ class SQLiteStore:
         self._seed_default_connectors(conn, DEFAULT_LOCAL_USER_ID)
         self._seed_default_source_configs(conn, overwrite=False)
         self._repair_retired_rss_urls(conn)
+
+    def _migrate_source_selection_modes(self, conn: sqlite3.Connection):
+        """Preserve legacy explicit source choices when introducing auto mode."""
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(source_configs)")}
+        if "selection_mode" not in columns:
+            return
+        conn.execute(
+            "UPDATE source_configs SET selection_mode = CASE WHEN enabled = 1 THEN 'enabled' ELSE 'disabled' END "
+            "WHERE selection_mode = 'legacy' OR selection_mode NOT IN ('auto', 'enabled', 'disabled')"
+        )
 
     def _repair_retired_rss_urls(self, conn: sqlite3.Connection):
         """Replace only the known retired LangChain RSS endpoint.
@@ -186,10 +247,11 @@ class SQLiteStore:
                 conn.execute(
                     """
                     INSERT INTO source_configs
-                    (user_id, source_id, enabled, display_name, config_json, priority, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    (user_id, source_id, enabled, selection_mode, display_name, config_json, priority, updated_at)
+                    VALUES (?, ?, ?, 'auto', ?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(user_id, source_id) DO UPDATE SET
                         enabled = excluded.enabled,
+                        selection_mode = excluded.selection_mode,
                         display_name = excluded.display_name,
                         config_json = excluded.config_json,
                         priority = excluded.priority,
@@ -207,8 +269,8 @@ class SQLiteStore:
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO source_configs
-                    (user_id, source_id, enabled, display_name, config_json, priority)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (user_id, source_id, enabled, selection_mode, display_name, config_json, priority)
+                    VALUES (?, ?, ?, 'auto', ?, ?, ?)
                     """,
                     (
                         user_id, source_id,
@@ -277,6 +339,7 @@ class SQLiteStore:
             result = dict(row)
             result.pop("auto_expand_interests", None)
             result["enabled_sources_json"] = self.loads(result["enabled_sources_json"], DEFAULT_SOURCES)
+            result["source_region_preference"] = result.get("source_region_preference") or "both"
             result["enabled_connectors_json"] = self.loads(result["enabled_connectors_json"], DEFAULT_CONNECTORS)
             result["desktop_push_enabled"] = bool(result["desktop_push_enabled"])
             result["sync_before_briefing"] = bool(result.get("sync_before_briefing", 1))
@@ -298,6 +361,7 @@ class SQLiteStore:
             "max_interest_keywords",
             "mode_enabled",
             "onboarding_completed",
+            "source_region_preference",
         }
         assignments = []
         params = []
@@ -312,6 +376,8 @@ class SQLiteStore:
                 value = max(1, int(value))
             elif key == "generate_mode":
                 value = value if value in {"mock", "hybrid", "live"} else "mock"
+            elif key == "source_region_preference":
+                value = value if value in {"both", "domestic", "international"} else "both"
             elif key in {"enabled_sources_json", "enabled_connectors_json"}:
                 value = self.dumps(value)
             elif key in {"desktop_push_enabled", "sync_before_briefing", "mode_enabled", "onboarding_completed"}:
@@ -362,6 +428,7 @@ class SQLiteStore:
         priority: Optional[int] = None,
         config: Optional[Dict[str, Any]] = None,
         display_name: Optional[str] = None,
+        selection_mode: Optional[str] = None,
         user_id: int = DEFAULT_LOCAL_USER_ID,
     ) -> Dict[str, Any]:
         existing = self.get_source_config(source_id, user_id=user_id) or {
@@ -370,8 +437,20 @@ class SQLiteStore:
             "display_name": display_name or source_id,
             "priority": 50,
             "config_json": {},
+            "selection_mode": "auto",
         }
-        next_enabled = existing["enabled"] if enabled is None else bool(enabled)
+        # Boolean callers are the legacy API surface. Treat an explicit boolean
+        # update as a deliberate manual choice, while callers that omit it keep
+        # the new automatic mode intact.
+        next_mode = (
+            ("enabled" if enabled else "disabled") if selection_mode is None and enabled is not None
+            else (existing.get("selection_mode", "auto") if selection_mode is None else selection_mode)
+        )
+        if next_mode not in {"auto", "enabled", "disabled"}:
+            raise ValueError("Unsupported source selection mode")
+        # Keep the legacy boolean column coherent for older readers.  It is no
+        # longer the routing decision; ``selection_mode`` is authoritative.
+        next_enabled = next_mode != "disabled"
         next_priority = existing["priority"] if priority is None else int(priority)
         next_config = existing["config_json"] if config is None else config
         next_display_name = display_name or existing.get("display_name") or source_id
@@ -379,10 +458,11 @@ class SQLiteStore:
             conn.execute(
                 """
                 INSERT INTO source_configs
-                (user_id, source_id, enabled, display_name, config_json, priority, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                (user_id, source_id, enabled, selection_mode, display_name, config_json, priority, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(user_id, source_id) DO UPDATE SET
                     enabled = excluded.enabled,
+                    selection_mode = excluded.selection_mode,
                     display_name = excluded.display_name,
                     config_json = excluded.config_json,
                     priority = excluded.priority,
@@ -390,7 +470,7 @@ class SQLiteStore:
                 """,
                 (
                     user_id, source_id,
-                    1 if next_enabled else 0,
+                    1 if next_enabled else 0, next_mode,
                     next_display_name,
                     self.dumps(next_config),
                     next_priority,
@@ -402,6 +482,7 @@ class SQLiteStore:
     def _source_config_from_row(self, row: sqlite3.Row) -> Dict[str, Any]:
         item = dict(row)
         item["enabled"] = bool(item["enabled"])
+        item["selection_mode"] = item.get("selection_mode") or ("enabled" if item["enabled"] else "disabled")
         item["config_json"] = self.loads(item["config_json"], {})
         return item
 
@@ -1466,24 +1547,81 @@ class SQLiteStore:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT signals.*, MAX(feedback_events.created_at) AS saved_at
+                SELECT signals.*, preferences.saved_at
                 FROM signals
-                LEFT JOIN feedback_events
-                  ON feedback_events.signal_id = signals.id AND feedback_events.event_type = 'saved' AND feedback_events.user_id = ?
-                WHERE signals.status = 'saved' AND signals.user_id = ?
-                GROUP BY signals.id
-                ORDER BY saved_at DESC, signals.created_at DESC
+                JOIN signal_preferences preferences
+                  ON preferences.signal_id = signals.id AND preferences.user_id = signals.user_id
+                WHERE preferences.saved = 1 AND signals.user_id = ?
+                ORDER BY preferences.saved_at DESC, signals.created_at DESC
                 LIMIT ?
                 """,
-                (user_id, user_id, limit),
+                (user_id, limit),
             ).fetchall()
             return [self._signal_from_row(row) for row in rows]
 
     def delete_saved_signal(self, signal_id: int, user_id: int = DEFAULT_LOCAL_USER_ID) -> bool:
+        return self.set_saved_signal(signal_id, False, user_id=user_id)["changed"]
+
+    def get_signal_preference_state(self, signal_id: int, user_id: int = DEFAULT_LOCAL_USER_ID) -> Optional[Dict[str, Any]]:
         with self.connect() as conn:
-            cursor = conn.execute("DELETE FROM signals WHERE id = ? AND user_id = ? AND status = 'saved'", (signal_id, user_id))
+            if not conn.execute("SELECT 1 FROM signals WHERE id = ? AND user_id = ?", (signal_id, user_id)).fetchone():
+                return None
+            row = conn.execute(
+                "SELECT saved, recommendation_preference, saved_at, preference_updated_at FROM signal_preferences WHERE signal_id = ? AND user_id = ?",
+                (signal_id, user_id),
+            ).fetchone()
+            return {
+                "saved": bool(row["saved"]) if row else False,
+                "recommendation_preference": row["recommendation_preference"] if row else None,
+                "saved_at": row["saved_at"] if row else None,
+                "preference_updated_at": row["preference_updated_at"] if row else None,
+            }
+
+    def set_saved_signal(self, signal_id: int, saved: bool, user_id: int = DEFAULT_LOCAL_USER_ID) -> Dict[str, Any]:
+        with self.connect() as conn:
+            if not conn.execute("SELECT 1 FROM signals WHERE id = ? AND user_id = ?", (signal_id, user_id)).fetchone():
+                raise ValueError("Signal not found for this user")
+            row = conn.execute("SELECT saved, recommendation_preference FROM signal_preferences WHERE signal_id = ? AND user_id = ?", (signal_id, user_id)).fetchone()
+            previous = bool(row["saved"]) if row else False
+            if previous == bool(saved):
+                return {"saved": previous, "recommendation_preference": row["recommendation_preference"] if row else None, "changed": False}
+            conn.execute(
+                """
+                INSERT INTO signal_preferences (user_id, signal_id, saved, saved_at)
+                VALUES (?, ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END)
+                ON CONFLICT(user_id, signal_id) DO UPDATE SET
+                  saved = excluded.saved,
+                  saved_at = CASE WHEN excluded.saved = 1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                  updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, signal_id, int(saved), int(saved)),
+            )
             conn.commit()
-            return cursor.rowcount > 0
+            return {"saved": bool(saved), "recommendation_preference": row["recommendation_preference"] if row else None, "changed": True}
+
+    def set_recommendation_preference(self, signal_id: int, preference: Optional[str], user_id: int = DEFAULT_LOCAL_USER_ID) -> Dict[str, Any]:
+        if preference not in {None, "tracked", "ignored"}:
+            raise ValueError("Unsupported recommendation preference")
+        with self.connect() as conn:
+            if not conn.execute("SELECT 1 FROM signals WHERE id = ? AND user_id = ?", (signal_id, user_id)).fetchone():
+                raise ValueError("Signal not found for this user")
+            row = conn.execute("SELECT saved, recommendation_preference FROM signal_preferences WHERE signal_id = ? AND user_id = ?", (signal_id, user_id)).fetchone()
+            previous = row["recommendation_preference"] if row else None
+            if previous == preference:
+                return {"saved": bool(row["saved"]) if row else False, "recommendation_preference": previous, "previous_preference": previous, "changed": False}
+            conn.execute(
+                """
+                INSERT INTO signal_preferences (user_id, signal_id, recommendation_preference, preference_updated_at)
+                VALUES (?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)
+                ON CONFLICT(user_id, signal_id) DO UPDATE SET
+                  recommendation_preference = excluded.recommendation_preference,
+                  preference_updated_at = excluded.preference_updated_at,
+                  updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, signal_id, preference, preference),
+            )
+            conn.commit()
+            return {"saved": bool(row["saved"]) if row else False, "recommendation_preference": preference, "previous_preference": previous, "changed": True}
 
     def get_feedback_signals(self, event_type: str, limit: int = 100, user_id: int = DEFAULT_LOCAL_USER_ID) -> List[Dict[str, Any]]:
         if event_type not in {"ignored", "tracked"}:
@@ -1491,48 +1629,30 @@ class SQLiteStore:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT s.*, e.created_at AS feedback_at
-                FROM feedback_events e
-                JOIN signals s ON s.id = e.signal_id
-                WHERE e.event_type = ? AND e.user_id = ? AND s.user_id = ?
-                  AND e.id = (
-                    SELECT latest.id FROM feedback_events latest
-                    WHERE latest.signal_id = e.signal_id AND latest.user_id = ?
-                      AND latest.event_type IN ('ignored', 'tracked')
-                    ORDER BY latest.id DESC LIMIT 1
-                  )
-                ORDER BY feedback_at DESC
+                SELECT s.*, p.preference_updated_at AS feedback_at
+                FROM signal_preferences p
+                JOIN signals s ON s.id = p.signal_id AND s.user_id = p.user_id
+                WHERE p.recommendation_preference = ? AND p.user_id = ?
+                ORDER BY p.preference_updated_at DESC, s.created_at DESC
                 LIMIT ?
                 """,
-                (event_type, user_id, user_id, user_id, limit),
+                (event_type, user_id, limit),
             ).fetchall()
             return [self._signal_from_row(row) for row in rows]
 
     def clear_feedback_signal(self, signal_id: int, event_type: str, user_id: int = DEFAULT_LOCAL_USER_ID) -> bool:
         if event_type not in {"ignored", "tracked"}:
             return False
-        with self.connect() as conn:
-            cursor = conn.execute(
-                "DELETE FROM feedback_events WHERE signal_id = ? AND event_type = ? AND user_id = ?",
-                (signal_id, event_type, user_id),
-            )
-            if cursor.rowcount:
-                row = conn.execute("SELECT status, signal_date FROM signals WHERE id = ? AND user_id = ?", (signal_id, user_id)).fetchone()
-                if row and row["status"] == event_type:
-                    next_status = "active" if row["signal_date"] == date.today().isoformat() else "archived"
-                    conn.execute("UPDATE signals SET status = ? WHERE id = ? AND user_id = ?", (next_status, signal_id, user_id))
-            conn.commit()
-            return cursor.rowcount > 0
+        state = self.set_recommendation_preference(signal_id, None, user_id=user_id)
+        return state["changed"]
 
     def has_feedback_signal(self, signal_id: int, event_type: str, user_id: int = DEFAULT_LOCAL_USER_ID) -> bool:
         if event_type not in {"saved", "ignored", "tracked"}:
             return False
-        with self.connect() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM feedback_events WHERE signal_id = ? AND event_type = ? AND user_id = ? LIMIT 1",
-                (signal_id, event_type, user_id),
-            ).fetchone()
-            return bool(row)
+        state = self.get_signal_preference_state(signal_id, user_id=user_id)
+        if not state:
+            return False
+        return state["saved"] if event_type == "saved" else state["recommendation_preference"] == event_type
 
     def get_today_signals(self, include_archived: bool = True, user_id: int = DEFAULT_LOCAL_USER_ID) -> List[Dict[str, Any]]:
         with self.connect() as conn:
@@ -1709,9 +1829,25 @@ class SQLiteStore:
 
     def _signal_from_row(self, row: sqlite3.Row) -> Dict[str, Any]:
         item = dict(row)
+        if "saved" not in item or "recommendation_preference" not in item:
+            with self.connect() as conn:
+                preference = conn.execute(
+                    "SELECT saved, recommendation_preference FROM signal_preferences WHERE signal_id = ? AND user_id = ?",
+                    (item["id"], item["user_id"]),
+                ).fetchone()
+            item["saved"] = bool(preference["saved"]) if preference else False
+            item["recommendation_preference"] = preference["recommendation_preference"] if preference else None
+        else:
+            item["saved"] = bool(item["saved"])
         item["source_items_json"] = self.loads(item["source_items_json"], [])
         item["metadata_json"] = self.loads(item.get("metadata_json"), {})
-        if item["metadata_json"].get("briefing_version", 0) < 9:
+        briefing = item["metadata_json"]
+        if (
+            briefing.get("briefing_version", 0) < 9
+            or not briefing.get("display_title_ko")
+            or not briefing.get("display_summary_ko")
+            or bool(re.search(r"[A-Za-z]{4,}", str(briefing.get("display_title_ko", ""))))
+        ):
             from src.signals.korean_briefing import build_korean_briefing
             from src.signals.provenance import source_metadata
             from src.sources.article_content import article_context
@@ -1782,7 +1918,7 @@ class SQLiteStore:
             item[key] = item["metadata_json"].get(key)
         return item
 
-    def record_feedback(self, signal_id: int, event_type: str, payload: Optional[Dict[str, Any]] = None, user_id: int = DEFAULT_LOCAL_USER_ID) -> int:
+    def record_feedback(self, signal_id: int, event_type: str, payload: Optional[Dict[str, Any]] = None, user_id: int = DEFAULT_LOCAL_USER_ID, materialize: bool = True) -> int:
         with self.connect() as conn:
             if not conn.execute("SELECT 1 FROM signals WHERE id = ? AND user_id = ?", (signal_id, user_id)).fetchone():
                 raise ValueError("Signal not found for this user")
@@ -1793,7 +1929,18 @@ class SQLiteStore:
                 """,
                 (user_id, signal_id, event_type, self.dumps(payload or {})),
             )
-            if event_type in {"saved", "ignored", "tracked"}:
+            if materialize and event_type == "saved":
+                conn.execute(
+                    "INSERT INTO signal_preferences (user_id, signal_id, saved, saved_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP) ON CONFLICT(user_id, signal_id) DO UPDATE SET saved = 1, saved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP",
+                    (user_id, signal_id),
+                )
+            elif materialize and event_type in {"tracked", "ignored"}:
+                conn.execute(
+                    "INSERT INTO signal_preferences (user_id, signal_id, recommendation_preference, preference_updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(user_id, signal_id) DO UPDATE SET recommendation_preference = excluded.recommendation_preference, preference_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP",
+                    (user_id, signal_id, event_type),
+                )
+                # Retain this legacy status update for callers still using the
+                # historic store API; new preference APIs never call this path.
                 conn.execute("UPDATE signals SET status = ? WHERE id = ? AND user_id = ?", (event_type, signal_id, user_id))
             conn.commit()
             return int(cursor.lastrowid)

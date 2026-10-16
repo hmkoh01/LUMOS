@@ -27,12 +27,12 @@ def build_korean_briefing(
         # Headlines and summaries read in the user's own language so they can judge
         # relevance at a glance; if translation is unavailable, fall back to the
         # original English rather than blocking signal generation.
-        display_title = translate_to_korean(clean_title) or clean_title or clean_summary[:120] or "제목 없는 소식"
+        display_title = translate_to_korean(clean_title) or f"{topic} 관련 새 소식"
     else:
         display_title = clean_title or clean_summary[:120] or "제목 없는 소식"
     display_title = polish_headline(strip_post_format(display_title))
     translated_summary = translate_to_korean(clean_summary) if clean_summary and _guess_language(clean_summary, "") == "en" else None
-    display_summary = (translated_summary or clean_summary)[:500] or "설명이 제공되지 않아 제목까지만 확인할 수 있어요."
+    display_summary = (translated_summary or (clean_summary if _guess_language(clean_summary, "") != "en" else "영문 원문을 바탕으로 정리한 소식이에요. 원문 보기에서 자세한 내용을 확인할 수 있어요."))[:500] or "설명이 제공되지 않아 제목까지만 확인할 수 있어요."
     detail = display_summary if clean_summary else ""
     limitation = ("수집된 제목과 짧은 설명을 정리했어요. 원문 전체나 영상 내용을 확인한 요약은 아니에요."
                   if clean_summary else "제목만 확보했어요. 구체적인 내용이나 결론은 원문에서 확인해주세요.")
@@ -197,10 +197,10 @@ def _action_ko(action_hint: str, topic: str) -> str:
     if "track" in hint or "compare" in hint:
         return f"비슷한 {topic} 사례를 2~3개 더 모아 흐름이 이어지는지 비교해보세요."
     if "review" in hint:
-        return "원문을 빠르게 훑고 계속 추적할 만한 흐름인지 표시해보세요."
+        return "원문을 빠르게 훑고 관심 있는 흐름인지 표시해보세요."
     if topic in {"AI 에이전트", "업무 자동화", "생산성 툴"}:
         return f"{topic}이 실제 업무나 제품 기능으로 이어지는 사례인지 확인해보세요."
-    return f"{topic} 흐름을 계속 추적할지 원문을 보고 판단해보세요."
+    return f"{topic} 흐름에 관심이 있는지 원문을 보고 판단해보세요."
 
 
 def _category_label(category: str) -> str:

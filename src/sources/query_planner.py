@@ -47,6 +47,10 @@ class QueryPlanner:
         base_params = {
             "language": source_config.get("language"),
             "region": source_config.get("region"),
+            "source_region": source_config.get("source_region"),
+            "content_region": source_config.get("content_region"),
+            "content_type": source_config.get("content_type"),
+            "usage_status": source_config.get("usage_status"),
         }
         base_params = {key: value for key, value in base_params.items() if value}
         original_keywords = self._unique(keywords)
@@ -112,7 +116,7 @@ class QueryPlanner:
                         seen_queries.add(query_key)
                 return unique_queries[:2]
             return [{"query": f"{term} trend", "params": {**base_params, "kind": "video"}} for term in self._unique(primary[:2])[:2]]
-        if source in {"rss", "official_ai_blogs", "company_newsroom"}:
+        if source in {"rss", "official_ai_blogs", "company_newsroom", "geeknews", "kisa_press", "kisa_research"}:
             terms = primary[:3] + [category.replace("_", " ").lower()]
             # One configured feed is fetched only once. Its Korean and English
             # entries are matched against the same bilingual interest set.

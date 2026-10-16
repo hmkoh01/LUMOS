@@ -125,6 +125,7 @@ SCHEMA_STATEMENTS = [
         user_id INTEGER NOT NULL DEFAULT 1,
         source_id TEXT NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 0,
+        selection_mode TEXT NOT NULL DEFAULT 'auto',
         display_name TEXT NOT NULL DEFAULT '',
         config_json TEXT NOT NULL DEFAULT '{}',
         priority INTEGER NOT NULL DEFAULT 50,
@@ -216,6 +217,20 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS signal_preferences (
+        user_id INTEGER NOT NULL,
+        signal_id INTEGER NOT NULL,
+        saved INTEGER NOT NULL DEFAULT 0,
+        recommendation_preference TEXT,
+        saved_at TEXT,
+        preference_updated_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, signal_id),
+        FOREIGN KEY (signal_id) REFERENCES signals(id) ON DELETE CASCADE
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS signal_reserves (
         pipeline_run_id INTEGER NOT NULL,
         rank INTEGER NOT NULL,
@@ -227,6 +242,8 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_interest_graph_keyword ON interest_graph(keyword)",
     "CREATE INDEX IF NOT EXISTS idx_signals_date_rank ON signals(signal_date, rank)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_events_signal ON feedback_events(signal_id)",
+    "CREATE INDEX IF NOT EXISTS idx_signal_preferences_saved ON signal_preferences(user_id, saved, saved_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_signal_preferences_recommendation ON signal_preferences(user_id, recommendation_preference, preference_updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_context_items_user_dedupe ON context_items(user_id, dedupe_key)",
     "CREATE INDEX IF NOT EXISTS idx_context_items_user_connector ON context_items(user_id, connector_type, collected_at)",
     "CREATE INDEX IF NOT EXISTS idx_context_sync_runs_user_started ON context_sync_runs(user_id, started_at DESC)",
@@ -329,6 +346,12 @@ MIGRATION_COLUMNS = {
         "auto_expand_interests": "INTEGER NOT NULL DEFAULT 0",
         "context_sync_interval_minutes": "INTEGER NOT NULL DEFAULT 360",
         "max_interest_keywords": "INTEGER NOT NULL DEFAULT 50",
+        "source_region_preference": "TEXT NOT NULL DEFAULT 'both'",
+    },
+    "source_configs": {
+        # Existing boolean configurations are converted once by SQLiteStore.
+        # Fresh databases declare this column directly with an `auto` default.
+        "selection_mode": "TEXT NOT NULL DEFAULT 'legacy'",
     },
     "interest_graph": {
         "user_id": "INTEGER NOT NULL DEFAULT 1",

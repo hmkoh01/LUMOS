@@ -7,6 +7,7 @@ const state = {
   interestRecommendations: [],
   feedbackSignals: [],
   feedbackMode: null,
+  recommendationCategory: "tracked",
   signals: [],
   savedSignals: [],
   hasMoreSignals: false,
@@ -14,6 +15,8 @@ const state = {
   loadingMoreSignals: false,
   activeTab: "signals",
   briefingPeriod: "today",
+  briefingDateKey: "",
+  refreshingForDateChange: false,
   onboardingStep: 1,
   onboardingRole: "예비 창업자 / PM",
   onboardingKeywords: [],
@@ -30,6 +33,9 @@ const state = {
 };
 
 const sourceCopy = {
+  geeknews: ["GeekNews", "한국 개발·기술·스타트업 커뮤니티의 링크와 토론입니다."],
+  kisa_press: ["KISA 보도자료", "한국인터넷진흥원의 공식 보도자료입니다."],
+  kisa_research: ["KISA 연구보고서", "한국인터넷진흥원의 공식 연구보고서입니다."],
   hackernews: ["Hacker News", "개발자와 스타트업 커뮤니티에서 빠르게 반응하는 흐름을 봐요."],
   github: ["GitHub", "오픈소스 저장소의 구현 움직임과 새 프로젝트를 확인해요."],
   rss: ["RSS / 공식 블로그", "직접 고른 피드와 제품 블로그에서 업데이트를 확인해요."],
@@ -42,13 +48,14 @@ const sourceCopy = {
   company_newsroom: ["Company Newsrooms", "회사 공식 뉴스룸을 더 편하게 연결할 수 있도록 준비하고 있어요."],
 };
 
-const sourceOrder = ["hackernews", "github", "rss", "official_ai_blogs", "producthunt", "reddit", "youtube", "naver_news", "arxiv", "company_newsroom"];
+const sourceOrder = ["hackernews", "github", "rss", "official_ai_blogs", "geeknews", "kisa_press", "kisa_research", "producthunt", "reddit", "youtube", "naver_news", "arxiv", "company_newsroom"];
 const hashToTab = {
   "#today": "signals",
   "#signals": "signals",
   "#saved": "saved",
-  "#tracked": "tracked",
-  "#ignored": "ignored",
+  "#tracked": "recommendations",
+  "#ignored": "recommendations",
+  "#recommendations": "recommendations",
   "#interests": "interests",
   "#sources": "sources",
   "#activity": "activity",
@@ -57,8 +64,7 @@ const hashToTab = {
 const tabToHash = {
   signals: "#today",
   saved: "#saved",
-  tracked: "#tracked",
-  ignored: "#ignored",
+  recommendations: "#recommendations",
   interests: "#interests",
   sources: "#sources",
   activity: "#activity",
@@ -89,6 +95,7 @@ async function initApp() {
   window.addEventListener("pagehide", storeScrollPosition);
 
   await loadInitialData();
+  startBriefingDayWatcher();
 
   // Auto-open onboarding for first-time auth users.
   if (authClient.isAuthMode() && state.firstRun) openOnboarding();
@@ -112,6 +119,8 @@ function tabFromHash(hash = location.hash) {
 function applyHashTab(options = {}) {
   const knownHash = Boolean(hashToTab[location.hash]);
   const tab = tabFromHash(location.hash);
+  if (location.hash === "#tracked") state.recommendationCategory = "tracked";
+  if (location.hash === "#ignored") state.recommendationCategory = "ignored";
   if (location.hash && !knownHash) {
     history.replaceState(null, "", tabToHash.signals);
   }
@@ -136,11 +145,11 @@ function setActiveTab(tab, options = {}) {
 
 function bindTopActions() {
   document.getElementById("generate-signals").addEventListener("click", () => generateSignals());
-  document.getElementById("view-saved-signals").addEventListener("click", () => setActiveTab("saved", { updateHash: true, load: true }));
   document.getElementById("refresh-saved-signals").addEventListener("click", loadSavedSignals);
-  document.getElementById("show-tracked-feedback").addEventListener("click", () => setActiveTab("tracked", { updateHash: true, load: true }));
-  document.getElementById("show-ignored-feedback").addEventListener("click", () => setActiveTab("ignored", { updateHash: true, load: true }));
-  document.querySelectorAll("[data-back-to-saved]").forEach((button) => button.addEventListener("click", closeFeedbackSignals));
+  document.getElementById("refresh-recommendations").addEventListener("click", loadRecommendationSignals);
+  document.querySelectorAll("[data-recommendation-category]").forEach((button) => {
+    button.addEventListener("click", () => selectRecommendationCategory(button.dataset.recommendationCategory));
+  });
   document.getElementById("refresh-activity").addEventListener("click", loadActivity);
   document.getElementById("settings-form").addEventListener("submit", saveSettings);
   document.getElementById("add-interest").addEventListener("click", openInterestForm);
@@ -163,7 +172,6 @@ function bindBriefingPeriods() {
         item.classList.toggle("active", selected);
         item.setAttribute("aria-selected", String(selected));
       });
-      renderPeriodDescription();
       loadSignals();
       // Reset conversation so the next Assistant message uses the new period's signals.
       assistantState.conversationId = null;
@@ -171,16 +179,63 @@ function bindBriefingPeriods() {
       updateChatPeriodLabel();
     });
   });
-  renderPeriodDescription();
 }
 
-function renderPeriodDescription() {
-  const copy = {
-    today: "오늘 게시된 소식입니다.",
-    week: "이번 주의 이전 날짜에 게시된 소식입니다.",
-    month: "이번 달의 이전 주에 게시된 소식입니다.",
-  };
-  setText("period-description", copy[state.briefingPeriod] || copy.today);
+// The server groups briefing periods by the Korean calendar.  Keep an open
+// browser tab aligned with that calendar too, including after a laptop wakes
+// from sleep (when a long timeout may have been delayed).
+function koreanDateKey(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function millisecondsUntilNextKoreanMidnight(now = new Date()) {
+  const [year, month, day] = koreanDateKey(now).split("-").map(Number);
+  // Korea has a fixed UTC+09:00 offset and no daylight-saving transition.
+  const nextMidnightUtc = Date.UTC(year, month - 1, day + 1, 0, 0, 0) - (9 * 60 * 60 * 1000);
+  return Math.max(1000, nextMidnightUtc - now.getTime() + 250);
+}
+
+function startBriefingDayWatcher() {
+  state.briefingDateKey = koreanDateKey();
+  scheduleBriefingDayCheck();
+  window.addEventListener("focus", checkBriefingDayChange);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkBriefingDayChange();
+  });
+}
+
+function scheduleBriefingDayCheck() {
+  window.clearTimeout(state.briefingDayTimer);
+  state.briefingDayTimer = window.setTimeout(async () => {
+    await checkBriefingDayChange();
+    scheduleBriefingDayCheck();
+  }, millisecondsUntilNextKoreanMidnight());
+}
+
+async function checkBriefingDayChange() {
+  const currentDateKey = koreanDateKey();
+  if (!state.briefingDateKey) {
+    state.briefingDateKey = currentDateKey;
+    return;
+  }
+  if (currentDateKey === state.briefingDateKey || state.refreshingForDateChange) return;
+
+  state.briefingDateKey = currentDateKey;
+  if (state.activeTab !== "signals" || state.briefingPeriod !== "today") return;
+
+  state.refreshingForDateChange = true;
+  try {
+    await loadSignals();
+  } finally {
+    state.refreshingForDateChange = false;
+  }
 }
 
 function bindOnboarding() {
@@ -219,7 +274,7 @@ async function loadInitialData() {
 async function loadTab(tab) {
   if (tab === "signals") await loadSignals();
   if (tab === "saved") await loadSavedSignals();
-  if (tab === "tracked" || tab === "ignored") await openFeedbackSignals(tab);
+  if (tab === "recommendations") await loadRecommendationSignals();
   if (tab === "interests") await loadInterests();
   if (tab === "sources") await loadSources();
   if (tab === "activity") await loadActivity();
@@ -255,7 +310,16 @@ async function apiFetch(path, options = {}) {
       throw new Error("인증이 만료됐어요. 다시 로그인해주세요.");
     }
   }
-  if (!response.ok) throw new Error("잠시 연결이 불안정해요. 다시 시도해보세요.");
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = typeof body.detail === "string" ? body.detail : body.error || "";
+    } catch (_) {}
+    const error = new Error(detail || "잠시 연결이 불안정해요. 다시 시도해보세요.");
+    error.status = response.status;
+    throw error;
+  }
   const data = await response.json();
   if (data.success === false) throw new Error(data.error || "잠시 연결이 불안정해요. 다시 시도해보세요.");
   return data;
@@ -349,20 +413,24 @@ function renderSignals() {
     bindEmptyAction("open-today", () => document.querySelector('[data-period="today"]')?.click());
     return;
   }
-  renderPeriodDescription();
-  container.innerHTML = state.signals.map((signal, index) => renderSignalCard(signal, index + 1)).join("") + `
-    <div class="more-signals" aria-live="polite">
-      ${state.hasMoreSignals
-        ? `<button class="button secondary" id="more-signals" ${state.loadingMoreSignals ? "disabled" : ""}>${state.loadingMoreSignals ? "추가 소식을 불러오는 중…" : "추가 신호 보기"}</button>`
-        : `<p>이번 브리핑에서 더 보여드릴 자료가 없어요. 새로운 자료는 ‘소식 새로 받기’로 찾아보세요.</p>`}
-    </div>`;
+  container.innerHTML = state.signals.map((signal, index) => renderSignalCard(signal, index + 1)).join("");
   bindSignalActions(container);
-  document.getElementById("more-signals")?.addEventListener("click", loadMoreSignals);
+}
+
+function selectRecommendationCategory(category) {
+  if (!["tracked", "ignored"].includes(category)) return;
+  state.recommendationCategory = category;
+  document.querySelectorAll("[data-recommendation-category]").forEach((button) => {
+    const selected = button.dataset.recommendationCategory === category;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+  });
+  loadRecommendationSignals();
 }
 
 async function loadSavedSignals(render = true, scrollPosition = render ? captureScrollPosition() : null) {
   const container = document.getElementById("saved-signals-list");
-  if (render) showLoading("saved-signals-list", "저장한 소식을 불러오고 있어요.");
+  if (render) showLoading(container.id, "저장한 소식을 불러오고 있어요.");
   try {
     const data = await api("/api/v1/signals/saved");
     state.savedSignals = data.signals || [];
@@ -380,17 +448,13 @@ async function loadSavedSignals(render = true, scrollPosition = render ? capture
 function renderSavedSignals() {
   const container = document.getElementById("saved-signals-list");
   if (!state.savedSignals.length) {
-    container.innerHTML = emptyState("저장한 소식이 없어요.", "오늘의 소식에서 저장을 누르면 이곳에서 원문을 다시 볼 수 있어요.", "오늘의 소식 보기", "open-signals");
+    container.innerHTML = emptyState("아직 저장한 소식이 없어요.", "브리핑에서 저장하면 이곳에서 다시 볼 수 있어요.", "브리핑 보기", "open-signals");
     bindEmptyAction("open-signals", () => setActiveTab("signals", { updateHash: true, load: true }));
     return;
   }
   container.innerHTML = state.savedSignals.map((signal, index) => renderSavedSignalCard(signal, index + 1)).join("");
-  container.querySelectorAll("[data-delete-saved]").forEach((button) => {
-    button.addEventListener("click", () => deleteSavedSignal(button.closest(".signal-card").dataset.signalId, button));
-  });
-  container.querySelectorAll("[data-open-url]").forEach((button) => {
-    button.addEventListener("click", () => window.open(button.dataset.openUrl, "_blank", "noopener,noreferrer"));
-  });
+  container.querySelectorAll("[data-delete-saved]").forEach((button) => button.addEventListener("click", () => deleteSavedSignal(button.closest(".signal-card").dataset.signalId, button)));
+  container.querySelectorAll("[data-open-url]").forEach((button) => button.addEventListener("click", () => window.open(button.dataset.openUrl, "_blank", "noopener,noreferrer")));
 }
 
 function renderSavedSignalCard(signal, rank) {
@@ -403,7 +467,7 @@ function renderSavedSignalCard(signal, rank) {
     <div class="signal-head"><div class="rank">${rank}</div><div><h3 class="signal-title">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div>
     <p class="signal-derived-from">${escapeHtml(keywordOrigin)}</p>
     <div class="signal-meta"><span class="pill">출처 ${escapeHtml(signal.source_display || sourceLabel(signal.source_name || "미확인"))}</span><span class="pill">저장한 날짜 ${escapeHtml(formatSavedDate(signal.saved_at || signal.created_at))}</span></div>
-    <div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button danger" data-delete-saved>저장 목록에서 삭제</button></div>
+    <div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button danger" data-delete-saved>목록에서 빼기</button></div>
   </article>`;
 }
 
@@ -413,10 +477,10 @@ async function deleteSavedSignal(signalId, button) {
     await api(`/api/v1/signals/${signalId}/saved`, { method: "DELETE" });
     state.savedSignals = state.savedSignals.filter((signal) => String(signal.id) !== String(signalId));
     renderSavedSignals();
-    showToast("저장한 소식에서 삭제했어요.");
+    showToast("목록에서 뺐어요.");
   } catch (error) {
     showToast(error.message);
-    setBusy(button, false, "저장 목록에서 삭제");
+    setBusy(button, false, "목록에서 빼기");
   }
 }
 
@@ -500,58 +564,43 @@ async function generateSignals(triggerButton) {
 
 function renderSignalCard(signal, listRank = 1) {
   const sourceItems = signal.source_items_json || [];
-  const confidence = Math.round(Number(signal.confidence || 0) * 100);
   const sourceUrl = signal.source_url || sourceItems.find((item) => item.url)?.url || "";
   const titleKo = signal.display_title_ko || signal.title || "오늘 확인할 소식";
   const headlineSummaryKo = signal.headline_summary_ko || signal.display_summary_ko || signal.summary || "원문에서 가져온 표현을 바탕으로 정리한 소식예요.";
   const storedReason = signal.recommendation_reason_ko || "";
-  const reasonKo = needsRecommendationRewrite(storedReason) ? recommendationReason(signal) : storedReason;
-  const actionKo = signal.recommended_action_ko || signal.recommended_action || "원문을 빠르게 훑고 계속 추적할 흐름인지 표시해보세요.";
-  const originalTitle = signal.original_title || signal.title || sourceItems[0]?.title || "";
-  const originalSnippet = signal.original_snippet || signal.summary || sourceItems[0]?.summary || "";
+  const reasonKo = needsRecommendationRewrite(storedReason) ? "" : storedReason;
   const matchedKeywords = signal.matched_keywords || signal.metadata_json?.matched_keywords || [];
-  const helpfulTermsAndTrend = helpfulTermsAndTrendText(signal, matchedKeywords);
-  const coreSummary = cleanCoreSummary(signal.detail_summary_ko) || originalSnippet || headlineSummaryKo;
-  const derivedFromKo = signal.derived_from_ko
-    || (matchedKeywords.length ? `'${matchedKeywords[0]}' 키워드에서 찾은 소식` : "");
+  const sourceLabelText = signal.source_display || sourceLabel(signal.source_name || "출처 미확인");
+  const contentType = humanCategory(signal.category);
+  const dateText = signal.content_timestamp ? formatBriefingTimestamp(signal.content_timestamp) : "";
+  const preference = signal.recommendation_preference || "";
   return `
     <article class="signal-card" data-signal-id="${signal.id}">
       <div class="signal-head">
         <div class="rank">${listRank}</div>
         <div>
           <h3 class="signal-title">${escapeHtml(titleKo)}</h3>
-          ${derivedFromKo ? `<p class="signal-derived-from">${escapeHtml(derivedFromKo)}</p>` : ""}
+          <div class="signal-meta compact"><span class="pill">${escapeHtml(sourceLabelText)}</span>${contentType ? `<span class="pill">${escapeHtml(contentType)}</span>` : ""}${dateText ? `<span class="pill">${escapeHtml(dateText)}</span>` : ""}</div>
           <p class="signal-summary">${escapeHtml(headlineSummaryKo)}</p>
         </div>
-      </div>
-      <div class="signal-meta">
-        <span class="pill">출처 ${escapeHtml(signal.source_display || "출처 미확인")}</span>
-        ${signal.collected_via ? `<span class="pill">수집 경로: ${escapeHtml(signal.collected_via)}</span>` : ""}
-        <span class="pill">${escapeHtml(formatBriefingTimestamp(signal.content_timestamp || signal.created_at || signal.updated_at))}</span>
-        <span class="pill">관련도 ${confidence || 70}%</span>
-        ${statusPill(signal.status)}
+        <button class="bookmark-button ${signal.saved ? "is-saved" : ""}" type="button" data-toggle-saved aria-pressed="${signal.saved ? "true" : "false"}" aria-label="${signal.saved ? "저장 해제" : "저장"}" title="${signal.saved ? "저장 해제" : "저장"}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.75A1.75 1.75 0 0 1 7.75 3h8.5A1.75 1.75 0 0 1 18 4.75V21l-6-3.8L6 21V4.75Z"/></svg></button>
       </div>
       <div class="signal-body">
-        <div class="info-box"><strong>핵심 요약</strong><p>${escapeHtml(headlineSummaryKo)}</p></div>
-        <div class="info-box"><strong>왜 중요한지</strong><p>${escapeHtml(reasonKo)}</p></div>
+        ${reasonKo ? `<div class="recommendation-reason"><strong>왜 추천했나요?</strong><p>${escapeHtml(reasonKo)}</p></div>` : ""}
       </div>
-      <div class="actions">
-        <button class="button secondary" data-feedback="saved">저장</button>
-        <button class="button secondary" data-feedback="ignored">관심 없음</button>
-        <button class="button secondary" data-feedback="tracked">계속 추적</button>
-        <button class="button primary" data-open-url="${escapeHtml(sourceUrl)}" ${sourceUrl ? "" : "disabled"}>원문 보기</button>
-        <button class="button ghost" data-ask-assistant="${signal.id}" data-signal-title="${escapeHtml(titleKo)}">Assistant에게 물어보기</button>
-      </div>
-      <details class="details">
-        <summary>자세히 보기</summary>
-        <div class="details-content">
-          <p class="detail-summary">
-            <strong>원문 제목</strong> ${escapeHtml(originalTitle || "확인되지 않았어요.")}<br><br>
-            <strong>내용 정리</strong> ${escapeHtml(coreSummary)}<br><br>
-            <strong>알면 좋을 용어·트렌드</strong> ${escapeHtml(helpfulTermsAndTrend)}
-          </p>
+      <div class="card-footer-actions">
+        <div class="recommendation-control">
+          <button class="button secondary" type="button" data-recommendation-menu aria-expanded="false">추천 조절</button>
+          <div class="recommendation-menu hidden" data-recommendation-popover>
+            <button type="button" data-set-preference="tracked" class="${preference === "tracked" ? "selected" : ""}"><svg class="preference-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3Zm2 10h7.1a2 2 0 0 0 1.9-1.37l2-6A2 2 0 0 0 18.1 10H14l.6-3.1A2.4 2.4 0 0 0 12.24 4L9 10v10Z"/></svg><span><strong>이런 소식 더 보기</strong><small>비슷한 소식을 더 추천받아요.</small></span></button>
+            <button type="button" data-set-preference="ignored" class="${preference === "ignored" ? "selected" : ""}"><svg class="preference-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14V4H4v10h3Zm2-10h7.1A2 2 0 0 1 18 5.37l2 6A2 2 0 0 1 18.1 14H14l.6 3.1A2.4 2.4 0 0 1 12.24 20L9 14V4Z"/></svg><span><strong>이런 소식 줄이기</strong><small>비슷한 소식의 추천을 줄여요.</small></span></button>
+          </div>
         </div>
-      </details>
+        <div class="actions card-primary-actions">
+          <button class="button secondary" data-open-url="${escapeHtml(sourceUrl)}" ${sourceUrl ? "" : "disabled"}>원문 보기</button>
+          <button class="button primary" data-ask-assistant="${signal.id}" data-signal-title="${escapeHtml(titleKo)}">AI에게 질문</button>
+        </div>
+      </div>
     </article>
   `;
 }
@@ -601,29 +650,46 @@ function needsRecommendationRewrite(reason) {
 }
 
 function bindSignalActions(container) {
-  container.querySelectorAll("[data-feedback]").forEach((button) => {
+  container.querySelectorAll("[data-toggle-saved]").forEach((button) => {
     button.addEventListener("click", async () => {
       const card = button.closest(".signal-card");
-      const eventType = button.dataset.feedback;
-      const messages = { saved: "저장했어요", ignored: "비슷한 소식을 줄일게요", tracked: "이 흐름을 계속 지켜볼게요" };
+      const saved = button.getAttribute("aria-pressed") !== "true";
       const scrollPosition = captureScrollPosition();
-      setBusy(button, true, "처리 중");
+      button.disabled = true;
       try {
-        await api(`/api/v1/signals/${card.dataset.signalId}/feedback`, {
-          method: "POST",
-          body: JSON.stringify({ event_type: eventType, payload: { surface: "web_app" } }),
+        await api(`/api/v1/signals/${card.dataset.signalId}/saved`, {
+          method: "PUT",
+          body: JSON.stringify({ saved }),
         });
-        showToast(messages[eventType]);
+        showToast(saved ? "저장했어요." : "저장을 해제했어요.");
         await loadSignals(false);
         renderSignals();
         restoreScrollPosition(scrollPosition);
       } catch (error) {
-        showToast(error.message);
+        // A running pre-update local server may not have the new PUT route
+        // yet. The long-standing feedback endpoint keeps saving available
+        // until that server is restarted.
+        if (error.status === 404 || error.status === 405) {
+          try {
+            await api(`/api/v1/signals/${card.dataset.signalId}/feedback`, {
+              method: "POST",
+              body: JSON.stringify({ event_type: "saved", payload: { surface: "web_app" } }),
+            });
+            showToast("저장했어요.");
+            await loadSignals(false);
+            renderSignals();
+          } catch (fallbackError) {
+            showToast(fallbackError.message);
+          }
+        } else showToast(error.message);
       } finally {
-        setBusy(button, false, button.textContent === "처리 중" ? messages[eventType] || "완료" : button.textContent);
+        button.disabled = false;
       }
     });
   });
+
+  container.querySelectorAll("[data-recommendation-menu]").forEach((button) => button.addEventListener("click", () => toggleRecommendationMenu(button)));
+  container.querySelectorAll("[data-set-preference]").forEach((button) => button.addEventListener("click", () => setRecommendationPreference(button)));
 
   container.querySelectorAll("[data-open-url]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -651,6 +717,52 @@ function bindSignalActions(container) {
     });
   });
 }
+
+function closeRecommendationMenus(except = null) {
+  document.querySelectorAll("[data-recommendation-popover]").forEach((menu) => {
+    if (menu !== except) menu.classList.add("hidden");
+  });
+  document.querySelectorAll("[data-recommendation-menu]").forEach((button) => {
+    if (!except || button.nextElementSibling !== except) button.setAttribute("aria-expanded", "false");
+  });
+}
+
+function toggleRecommendationMenu(button) {
+  const menu = button.nextElementSibling;
+  const opening = menu.classList.contains("hidden");
+  closeRecommendationMenus(opening ? menu : null);
+  menu.classList.toggle("hidden", !opening);
+  button.setAttribute("aria-expanded", String(opening));
+}
+
+async function setRecommendationPreference(button) {
+  const card = button.closest(".signal-card");
+  const preference = button.dataset.setPreference;
+  const current = card.querySelector("[data-set-preference].selected")?.dataset.setPreference || null;
+  const next = current === preference ? null : preference;
+  button.disabled = true;
+  try {
+    await api(`/api/v1/signals/${card.dataset.signalId}/recommendation-preference`, {
+      method: "PUT",
+      body: JSON.stringify({ preference: next }),
+    });
+    showToast(next === "tracked" ? "비슷한 소식을 더 추천할게요." : next === "ignored" ? "비슷한 소식을 줄일게요." : "추천 선택을 해제했어요.");
+    closeRecommendationMenus();
+    await loadSignals(false);
+    renderSignals();
+  } catch (error) {
+    showToast(error.message);
+    button.disabled = false;
+  }
+}
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".recommendation-control")) closeRecommendationMenus();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeRecommendationMenus();
+});
 
 async function loadInterests(render = true, scrollPosition = render ? captureScrollPosition() : null) {
   const container = document.getElementById("interests-list");
@@ -703,34 +815,41 @@ function renderInterestRecommendations(container) {
   });
 }
 
-async function openFeedbackSignals(mode, scrollPosition = captureScrollPosition()) {
-  const panel = document.getElementById(`feedback-${mode}-signals-panel`);
-  state.feedbackMode = mode;
-  showLoading(panel.id, "피드백한 소식을 불러오고 있어요.");
+async function loadRecommendationSignals(render = true, scrollPosition = render ? captureScrollPosition() : null) {
+  const container = document.getElementById("recommendation-signals-list");
+  const category = state.recommendationCategory;
+  document.querySelectorAll("[data-recommendation-category]").forEach((button) => {
+    const selected = button.dataset.recommendationCategory === category;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+  });
+  if (render) showLoading(container.id, "추천 선택을 불러오고 있어요.");
   try {
-    const data = await api(`/api/v1/signals/feedback/${mode}`);
+    const data = await api(`/api/v1/signals/feedback/${category}`);
     state.feedbackSignals = data.signals || [];
-    renderFeedbackSignals();
+    if (render) renderRecommendationSignals();
   } catch (error) {
-    panel.innerHTML = emptyState("소식을 불러오지 못했어요.", "잠시 후 다시 시도해주세요.", "저장한 소식으로 돌아가기", "back-to-saved");
-    bindEmptyAction("back-to-saved", closeFeedbackSignals);
+    if (render) {
+      container.innerHTML = emptyState("추천 선택을 불러오지 못했어요.", "잠시 후 다시 시도해주세요.", "새로고침", "retry-recommendations");
+      bindEmptyAction("retry-recommendations", loadRecommendationSignals);
+    }
   } finally {
     restoreScrollPosition(scrollPosition);
   }
 }
 
-function closeFeedbackSignals() {
-  state.feedbackMode = null;
-  setActiveTab("saved", { updateHash: true, load: true });
-}
-
-function renderFeedbackSignals() {
-  const panel = document.getElementById(`feedback-${state.feedbackMode}-signals-panel`);
-  const mode = state.feedbackMode;
-  panel.innerHTML = state.feedbackSignals.length ? `<div class="stack">${state.feedbackSignals.map((signal, index) => renderFeedbackSignalCard(signal, index + 1)).join("")}</div>` : emptyState("아직 설정한 소식이 없어요.", "오늘의 소식에서 피드백을 선택하면 이곳에서 다시 볼 수 있어요.", "저장한 소식으로 돌아가기", "back-to-saved");
-  panel.querySelectorAll("[data-open-url]").forEach((button) => button.addEventListener("click", () => window.open(button.dataset.openUrl, "_blank", "noopener,noreferrer")));
-  panel.querySelectorAll("[data-clear-feedback]").forEach((button) => button.addEventListener("click", () => clearFeedbackSignal(button.closest(".signal-card").dataset.signalId, button)));
-  panel.querySelector('[data-action="back-to-saved"]')?.addEventListener("click", closeFeedbackSignals);
+function renderRecommendationSignals() {
+  const container = document.getElementById("recommendation-signals-list");
+  const more = state.recommendationCategory === "tracked";
+  setText("recommendation-category-description", more ? "비슷한 소식의 추천을 늘리는 데 참고해요." : "비슷한 소식의 추천을 줄이는 데 참고해요.");
+  if (!state.feedbackSignals.length) {
+    container.innerHTML = emptyState(more ? "더 보고 싶은 소식이 없어요." : "덜 보고 싶은 소식이 없어요.", "브리핑에서 추천 조절을 선택하면 이곳에서 바꿀 수 있어요.", "브리핑 보기", "open-signals");
+    bindEmptyAction("open-signals", () => setActiveTab("signals", { updateHash: true, load: true }));
+    return;
+  }
+  container.innerHTML = state.feedbackSignals.map((signal, index) => renderFeedbackSignalCard(signal, index + 1)).join("");
+  container.querySelectorAll("[data-clear-feedback]").forEach((button) => button.addEventListener("click", () => clearFeedbackSignal(button.closest(".signal-card").dataset.signalId, button)));
+  container.querySelectorAll("[data-open-url]").forEach((button) => button.addEventListener("click", () => window.open(button.dataset.openUrl, "_blank", "noopener,noreferrer")));
 }
 
 function renderFeedbackSignalCard(signal, listRank) {
@@ -739,18 +858,18 @@ function renderFeedbackSignalCard(signal, listRank) {
   const url = signal.source_url || "";
   const keywordOrigin = keywordOriginText(signal);
   const source = signal.source_display || sourceLabel(signal.source_name || "미확인");
-  return `<article class="signal-card" data-signal-id="${signal.id}"><div class="signal-head"><div class="rank">${listRank}</div><div><h3 class="signal-title">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div><p class="signal-derived-from">${escapeHtml(keywordOrigin)}</p><div class="signal-meta"><span class="pill">출처 ${escapeHtml(source)}</span><span class="pill">설정한 날짜 ${escapeHtml(formatSavedDate(signal.feedback_at))}</span></div><div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button ghost" data-clear-feedback>설정 취소</button></div></article>`;
+  return `<article class="signal-card" data-signal-id="${signal.id}"><div class="signal-head"><div class="rank">${listRank}</div><div><h3 class="signal-title">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div><p class="signal-derived-from">${escapeHtml(keywordOrigin)}</p><div class="signal-meta"><span class="pill">출처 ${escapeHtml(source)}</span><span class="pill">설정한 날짜 ${escapeHtml(formatSavedDate(signal.feedback_at))}</span></div><div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button danger" data-clear-feedback>목록에서 빼기</button></div></article>`;
 }
 
 async function clearFeedbackSignal(signalId, button) {
   const scrollPosition = captureScrollPosition();
   setBusy(button, true, "취소 중");
   try {
-    await api(`/api/v1/signals/${signalId}/feedback/${state.feedbackMode}`, { method: "DELETE" });
+    await api(`/api/v1/signals/${signalId}/recommendation-preference`, { method: "PUT", body: JSON.stringify({ preference: null }) });
     state.feedbackSignals = state.feedbackSignals.filter((signal) => String(signal.id) !== String(signalId));
-    renderFeedbackSignals();
+    renderRecommendationSignals();
     restoreScrollPosition(scrollPosition);
-    showToast("피드백 설정을 취소했어요.");
+    showToast("목록에서 뺐어요.");
   } catch (error) {
     showToast(error.message);
     setBusy(button, false, "설정 취소");
@@ -880,7 +999,21 @@ async function loadSources(scrollPosition = captureScrollPosition()) {
     const emptyBanner = !enabledCount
       ? `<div class="empty-state"><h3>사용 중인 소스가 없어요.</h3><p>Hacker News, GitHub, RSS 중 하나를 사용하면 소식을 만들 수 있어요.</p><button class="button primary" data-action="seed-sources">기본 소스 사용하기</button></div>`
       : "";
-    container.innerHTML = emptyBanner + sources.map(renderSourceCard).join("");
+    const region = state.settings?.source_region_preference || "both";
+    container.innerHTML = `
+      <section class="source-settings-panel" aria-labelledby="source-settings-heading">
+        <p class="eyebrow">개인화 추천</p>
+        <h2 id="source-settings-heading">소식 소스 설정</h2>
+        <p class="source-settings-description">관심사에 맞는 소식 출처를 자동으로 추천해 드려요. 원하는 지역과 출처는 언제든 조정할 수 있어요.</p>
+        <div class="source-settings-section"><div class="source-settings-section-heading"><h3>어느 지역의 소식을 더 볼까요?</h3><p>선택한 지역을 우선으로 소식을 추천해요.</p></div>
+        <div class="region-options" role="radiogroup" aria-label="소식 지역 선택">
+          ${renderRegionOption("both", "국내 + 해외 모두", "국내 변화와 해외 흐름을 함께 추천해요.", "균형 추천", region)}
+          ${renderRegionOption("domestic", "국내 소식 중심", "한국의 뉴스, 산업, 취업, 정책을 우선해서 살펴봐요.", "국내 우선", region)}
+          ${renderRegionOption("international", "해외 소식 중심", "글로벌 기술, 연구, 비즈니스 흐름을 우선해서 살펴봐요.", "글로벌 우선", region)}
+        </div></div>
+        <p class="region-helper">선택하지 않은 지역의 중요한 소식도 함께 추천될 수 있어요.</p>
+        <details class="source-management"><summary><span>개별 소스 관리</span><small>고급 옵션</small></summary><div class="source-management-content"><p>자동 추천을 그대로 사용하거나, 원하는 출처만 직접 설정할 수 있어요.</p>${emptyBanner}<div class="source-management-list">${sources.map(renderSourceManagementCard).join("")}</div></div></details>
+      </section>`;
     bindSourceActions(container);
     bindEmptyAction("seed-sources", seedDefaultSources);
   } catch (error) {
@@ -889,6 +1022,36 @@ async function loadSources(scrollPosition = captureScrollPosition()) {
   } finally {
     restoreScrollPosition(scrollPosition);
   }
+}
+
+function renderRegionOption(value, title, description, tag, selected) {
+  return `<label class="region-option"><input class="visually-hidden" type="radio" name="source-region" value="${value}" ${value === selected ? "checked" : ""} /><span class="region-option-content"><strong>${title}</strong><span class="region-option-tag">${tag}</span><small>${description}</small></span></label>`;
+}
+
+function renderSourceManagementCard(source) {
+  const [name, desc] = sourceCopy[source.source_id] || [source.display_name, source.description];
+  const config = source.config_json || {};
+  const isRssLike = ["rss", "official_ai_blogs", "company_newsroom"].includes(source.source_id);
+  const mode = source.selection_mode || "auto";
+  const availability = source.available ? "사용 가능"
+    : source.capabilities?.distribution_status === "permission_review" ? "이용 조건 확인 필요"
+    : source.implemented_status === "placeholder" ? "준비 중" : "연결 필요";
+  const modeLabel = mode === "auto" ? "자동 추천" : mode === "enabled" ? "직접 사용" : "사용 안 함";
+  const feedCount = isRssLike ? (config.feed_urls || []).length : 0;
+  const feedNote = feedCount > 0 ? ` · 피드 ${feedCount}개` : "";
+  return `<div class="source-list-item" data-source-id="${escapeHtml(source.source_id)}">
+    <button class="source-item-header" type="button" aria-expanded="false">
+      <div class="source-item-info"><span class="source-item-name">${escapeHtml(name)}</span><span class="source-item-desc">${escapeHtml(desc)}</span></div>
+      <div class="source-item-badges"><span class="source-item-availability${source.available ? " available" : ""}">${escapeHtml(availability)}</span><span class="source-item-sep">·</span><span class="source-item-mode-badge">${escapeHtml(modeLabel)}${escapeHtml(feedNote)}</span></div>
+      <span class="source-item-arrow" aria-hidden="true"></span>
+    </button>
+    <div class="source-item-detail" hidden>
+      <div class="source-mode-row"><span class="source-mode-label">선택 방식</span><div class="segment-control" role="radiogroup" aria-label="${escapeHtml(name)} 선택 방식">${["auto", "enabled", "disabled"].map(v => `<label class="segment-option${mode === v ? " active" : ""}"><input type="radio" name="mode-${escapeHtml(source.source_id)}" value="${v}" ${mode === v ? "checked" : ""} class="visually-hidden" /><span>${v === "auto" ? "자동 추천" : v === "enabled" ? "직접 사용" : "사용 안 함"}</span></label>`).join("")}</div></div>
+      ${!source.available ? `<p class="source-item-note">${escapeHtml(source.availability_reason || "연결 조건을 확인해주세요.")}</p>` : ""}
+      ${isRssLike ? `<div class="source-rss-editor"><label class="form-group"><span>RSS feed URL</span><textarea data-feed-urls rows="3" placeholder="한 줄에 하나씩 입력하세요.">${escapeHtml((config.feed_urls || []).join("\n"))}</textarea></label><button class="button secondary" data-save-source>피드 저장</button></div>` : ""}
+      <span class="source-save-status" aria-live="polite"></span>
+    </div>
+  </div>`;
 }
 
 function renderSourceCard(source) {
@@ -913,27 +1076,87 @@ function renderSourceCard(source) {
 }
 
 function bindSourceActions(container) {
+  /* ── Expand / collapse source items ── */
+  container.querySelectorAll(".source-item-header").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const item = btn.closest(".source-list-item");
+      const detail = item.querySelector(".source-item-detail");
+      const opening = detail.hidden;
+      detail.hidden = !opening;
+      btn.setAttribute("aria-expanded", String(opening));
+      item.classList.toggle("expanded", opening);
+    });
+  });
+
+  /* ── Segment control: auto-save mode changes ── */
+  let modeSaveController = null;
+  container.querySelectorAll(".segment-control input[type='radio']").forEach((radio) => {
+    radio.addEventListener("change", async () => {
+      const item = radio.closest(".source-list-item");
+      const sourceId = item.dataset.sourceId;
+      const source = state.sources.find((s) => s.source_id === sourceId);
+      const config = { ...(source?.config_json || {}) };
+      const statusEl = item.querySelector(".source-save-status");
+      item.querySelectorAll(".segment-option").forEach((o) => o.classList.toggle("active", o.querySelector("input").checked));
+      const modeLabel = radio.value === "auto" ? "자동 추천" : radio.value === "enabled" ? "직접 사용" : "사용 안 함";
+      const badge = item.querySelector(".source-item-mode-badge");
+      const feedPart = badge.textContent.includes(" · ") ? badge.textContent.slice(badge.textContent.indexOf(" · ")) : "";
+      badge.textContent = modeLabel + feedPart;
+      if (modeSaveController) modeSaveController.abort();
+      modeSaveController = new AbortController();
+      statusEl.textContent = "저장 중…";
+      statusEl.className = "source-save-status saving";
+      try {
+        await api(`/api/v1/sources/configs/${sourceId}`, { method: "PUT", body: JSON.stringify({ selection_mode: radio.value, config_json: config }) });
+        statusEl.textContent = "저장 완료";
+        statusEl.className = "source-save-status saved";
+        setTimeout(() => { if (statusEl.textContent === "저장 완료") { statusEl.textContent = ""; statusEl.className = "source-save-status"; } }, 2000);
+      } catch (error) {
+        statusEl.textContent = "저장 실패";
+        statusEl.className = "source-save-status failed";
+        showToast(error.message);
+      }
+    });
+  });
+
+  /* ── RSS feed save buttons ── */
   container.querySelectorAll("[data-save-source]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const card = button.closest(".card");
-      const sourceId = card.dataset.sourceId;
-      const source = state.sources.find((item) => item.source_id === sourceId);
+      const item = button.closest(".source-list-item");
+      const sourceId = item.dataset.sourceId;
+      const source = state.sources.find((s) => s.source_id === sourceId);
       const config = { ...(source?.config_json || {}) };
-      const textarea = card.querySelector("[data-feed-urls]");
-      if (textarea) config.feed_urls = textarea.value.split("\n").map((line) => line.trim()).filter(Boolean);
+      const textarea = item.querySelector("[data-feed-urls]");
+      if (textarea) config.feed_urls = textarea.value.split("\n").map((l) => l.trim()).filter(Boolean);
+      const modeRadio = item.querySelector(".segment-control input:checked");
+      const mode = modeRadio?.value || source?.selection_mode || "auto";
       const original = button.textContent;
       setBusy(button, true, "저장 중");
       try {
-        await api(`/api/v1/sources/configs/${sourceId}`, {
-          method: "PUT",
-          body: JSON.stringify({ enabled: Boolean(card.querySelector("[data-source-enabled]")?.checked), config_json: config }),
-        });
-        showToast("소스 설정을 저장했어요");
-        await loadSources();
+        await api(`/api/v1/sources/configs/${sourceId}`, { method: "PUT", body: JSON.stringify({ selection_mode: mode, config_json: config }) });
+        showToast("피드 설정을 저장했어요");
+        const feedCount = config.feed_urls?.length || 0;
+        const badge = item.querySelector(".source-item-mode-badge");
+        const modeLabel = mode === "auto" ? "자동 추천" : mode === "enabled" ? "직접 사용" : "사용 안 함";
+        badge.textContent = modeLabel + (feedCount > 0 ? ` · 피드 ${feedCount}개` : "");
       } catch (error) {
         showToast(error.message);
       } finally {
         setBusy(button, false, original);
+      }
+    });
+  });
+
+  /* ── Region preference: auto-save ── */
+  container.querySelectorAll("input[name='source-region']").forEach((input) => {
+    input.addEventListener("change", async () => {
+      try {
+        const data = await api("/api/v1/settings", { method: "PUT", body: JSON.stringify({ source_region_preference: input.value }) });
+        state.settings = data.settings;
+        showToast("소식 지역 설정을 저장했어요.");
+      } catch (error) {
+        showToast(error.message);
+        await loadSources();
       }
     });
   });
@@ -988,7 +1211,7 @@ function activityFromPipeline(run) {
 }
 
 function activityFromFeedback(event) {
-  const messages = { saved: "소식을 저장했어요", ignored: "비슷한 소식을 줄이기로 했어요", tracked: "흐름을 계속 추적하기로 했어요", opened: "원문을 열어봤어요" };
+  const messages = { saved: "소식을 저장했어요", ignored: "비슷한 소식을 줄이기로 했어요", tracked: "관심 있는 소식으로 표시했어요", opened: "원문을 열어봤어요" };
   return {
     time: event.created_at,
     title: `${formatTime(event.created_at)} ${messages[event.event_type] || "활동을 기록했어요"}`,
@@ -1416,7 +1639,7 @@ function showToast(message) {
 }
 
 function statusPill(status) {
-  const labels = { saved: "저장됨", ignored: "관심 없음", tracked: "계속 추적 중", active: "사용 중", new: "새 소식" };
+  const labels = { saved: "저장됨", ignored: "관심 없음", tracked: "관심 있음", active: "사용 중", new: "새 소식" };
   return `<span class="status-chip subtle">${labels[status] || "사용 중"}</span>`;
 }
 
@@ -1781,6 +2004,11 @@ async function submitBetaFeedback(event) {
  * Returns false → navigating to /login (don't proceed).
  */
 async function initAuth() {
+  // Some existing Supabase projects still use /app as their configured OAuth
+  // callback URL. Accept that callback long enough for the SDK to persist the
+  // session, then keep the post-login experience on the public home page.
+  const authHash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const arrivedFromAuthCallback = authHash.has("access_token") || authHash.has("code") || new URLSearchParams(window.location.search).has("code");
   try {
     await authClient.init();
   } catch (e) {
@@ -1808,6 +2036,11 @@ async function initAuth() {
   }
 
   state.authUser = session.user;
+
+  if (arrivedFromAuthCallback) {
+    window.location.replace("/");
+    return false;
+  }
 
   // Redirect to /login on sign-out (e.g. token revoked in another tab).
   authClient.onAuthStateChange((event) => {
@@ -1864,6 +2097,7 @@ function resetClientState() {
   state.interestRecommendations = [];
   state.feedbackSignals = [];
   state.feedbackMode = null;
+  state.recommendationCategory = "tracked";
   state.signals = [];
   state.savedSignals = [];
   state.hasMoreSignals = false;

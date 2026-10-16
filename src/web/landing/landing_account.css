@@ -1,0 +1,19 @@
+.landing-account-menu { position: relative; }
+.brand-logo-link { display: flex; align-items: center; width: 182px; }
+.brand-logo-link img { display: block; width: 100%; height: auto; }
+.nav-actions { margin-left: auto; }
+.landing-login-button { display: inline-flex; align-items: center; justify-content: center; min-height: 38px; padding: 0 15px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); font-size: 13px; font-weight: 750; }.landing-login-button:hover { border-color: #b5c7df; background: var(--soft); }
+.landing-account-trigger { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 9px 5px 5px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.8); color: var(--ink); cursor: pointer; font: inherit; transition: border-color .16s ease, box-shadow .16s ease; }
+.landing-account-trigger:hover, .landing-account-trigger[aria-expanded="true"] { border-color: #b5c7df; box-shadow: 0 5px 14px rgba(16,42,92,.1); }
+.landing-avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--navy); color: #fff; font-size: 13px; font-weight: 800; }
+.landing-account-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; }
+.landing-account-popover { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; display: grid; min-width: 220px; padding: 7px; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 14px 32px rgba(16,42,92,.16); }
+.landing-account-popover[hidden] { display: none; }
+.landing-account-summary { display: grid; gap: 3px; padding: 9px 10px 11px; border-bottom: 1px solid var(--line); }
+.landing-account-summary strong { font-size: 13px; }.landing-account-summary small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.landing-account-popover a, .landing-account-popover button { width: 100%; padding: 10px; border: 0; border-radius: 9px; background: transparent; color: var(--ink); cursor: pointer; font: inherit; font-size: 13px; text-align: left; }.landing-account-popover a:hover, .landing-account-popover button:hover { background: var(--soft); }.landing-account-popover button { color: #b42318; }
+.landing-briefing-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 0 15px; border-radius: 12px; background: var(--navy); color: #fff; font-size: 13px; font-weight: 800; box-shadow: 0 5px 12px rgba(16,42,92,.22); }.landing-briefing-button:hover { background: #0b214a; }
+@media (max-width: 500px) { .brand-logo-link { width: 128px; } .landing-account-name, .landing-account-chevron { display: none; } .landing-account-trigger { padding: 4px; } .landing-briefing-button { min-height: 38px; padding: 0 11px; font-size: 12px; } }
+
+.team-footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }.team-footer > div { display: grid; gap: 4px; }.team-footer strong { font-size: 14px; }.team-footer span, .team-footer p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+@media (max-width: 600px) { .team-footer { align-items: flex-start; flex-direction: column; } }

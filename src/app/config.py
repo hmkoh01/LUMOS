@@ -14,5 +14,5 @@ def get_database_path() -> Path:
     return Path(configured) if configured else DATABASE_PATH
 
 API_HOST = "127.0.0.1"
-API_PORT = 8000
+API_PORT = int(os.environ.get("LUMOS_API_PORT", "8000"))
 DEFAULT_USER_ID = 1

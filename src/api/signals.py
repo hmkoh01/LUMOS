@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.api.dependencies import CurrentUser, get_current_user, get_store
+from src.api.models import RecommendationPreferenceUpdate, SavedSignalUpdate
 from src.api.pipeline import generate_signals_from_mock_pipeline
-from src.context.feedback_learning import apply_feedback_learning
+from src.signals.feedback import FeedbackService
 from src.signals.mock_generator import MockSignalGenerator
 from src.storage.sqlite_store import SQLiteStore
 from src.signals.generator import SignalGenerator
@@ -56,9 +57,26 @@ def get_saved_signals(
 def delete_saved_signal(
     signal_id: int, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
 ):
-    if not store.delete_saved_signal(signal_id, user_id=current_user.id):
+    try:
+        result = FeedbackService(store).set_saved(signal_id, False, user_id=current_user.id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="저장한 소식을 찾지 못했어요.")
+    if not result["state"]["changed"]:
         raise HTTPException(status_code=404, detail="저장한 소식을 찾지 못했어요.")
     return {"success": True}
+
+
+@router.put("/signals/{signal_id}/saved")
+def update_saved_signal(
+    signal_id: int,
+    request: SavedSignalUpdate,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return {"success": True, "data": FeedbackService(store).set_saved(signal_id, request.saved, user_id=current_user.id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/signals/feedback/{event_type}")
@@ -72,12 +90,26 @@ def get_feedback_signals(
 def clear_feedback_signal(
     signal_id: int, event_type: str, store: SQLiteStore = Depends(get_store), current_user: CurrentUser = Depends(get_current_user)
 ):
-    if not store.has_feedback_signal(signal_id, event_type, user_id=current_user.id):
-        raise HTTPException(status_code=404, detail="설정한 피드백을 찾지 못했어요.")
-    apply_feedback_learning(store, signal_id, event_type, {"reverted": True}, multiplier=-1, user_id=current_user.id)
-    if not store.clear_feedback_signal(signal_id, event_type, user_id=current_user.id):
+    if event_type not in {"tracked", "ignored"}:
+        raise HTTPException(status_code=400, detail="추천 선택만 해제할 수 있어요.")
+    result = FeedbackService(store).set_recommendation_preference(signal_id, None, user_id=current_user.id)
+    if not result["state"]["changed"]:
         raise HTTPException(status_code=404, detail="설정한 피드백을 찾지 못했어요.")
     return {"success": True}
+
+
+@router.put("/signals/{signal_id}/recommendation-preference")
+def update_recommendation_preference(
+    signal_id: int,
+    request: RecommendationPreferenceUpdate,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        result = FeedbackService(store).set_recommendation_preference(signal_id, request.preference, user_id=current_user.id)
+        return {"success": True, "data": result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/signals/more")

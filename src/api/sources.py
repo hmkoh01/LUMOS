@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ router = APIRouter(tags=["sources"])
 
 class SourceConfigUpdate(BaseModel):
     enabled: Optional[bool] = None
+    selection_mode: Optional[Literal["auto", "enabled", "disabled"]] = None
     priority: Optional[int] = None
     config_json: Optional[Dict[str, Any]] = None
 
@@ -32,6 +33,16 @@ def get_catalog(
     for source in sources:
         if source["source_id"] == "youtube":
             source["api_key_ready"] = bool(os.environ.get("YOUTUBE_API_KEY", "").strip())
+    from src.sources.router import SourceRouter
+    settings = store.get_settings(user_id=current_user.id)
+    profile = store.get_profile(user_id=current_user.id) or {}
+    interests = store.get_interests(limit=50, user_id=current_user.id)
+    recommended = {route["source"] for route in SourceRouter().plan(profile, settings, [], interests, source_configs=configs)}
+    for source in sources:
+        source["is_auto_recommended"] = source["source_id"] in recommended
+        source["effective_enabled"] = source.get("selection_mode") == "enabled" or (
+            source.get("selection_mode") == "auto" and source["is_auto_recommended"]
+        )
     return {
         "success": True,
         "sources": sources,
@@ -57,6 +68,7 @@ def update_config(
         enabled=update.enabled,
         priority=update.priority,
         config=update.config_json,
+        selection_mode=update.selection_mode,
         user_id=current_user.id,
     )
     return {"success": True, "config": config}

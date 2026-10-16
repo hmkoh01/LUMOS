@@ -61,6 +61,17 @@ class RSSCollector(BaseCollector):
         query_terms = self._query_terms(queries)
         route_id = queries[0].route_id if queries else None
         category = queries[0].category if queries else ""
+        params = queries[0].params if queries else {}
+        source_context = {
+            "feed_url": feed_url,
+            "feed_title": feed_title,
+            "publisher": feed_title,
+            "language": params.get("language") or "unknown",
+            "source_region": params.get("source_region") or params.get("region") or "unknown",
+            "content_region": params.get("content_region") or "unknown",
+            "content_type": params.get("content_type") or category or "unknown",
+            "usage_status": params.get("usage_status") or "unknown",
+        }
         matched_items = []
         fallback_items = []
         for entry in entries:
@@ -85,7 +96,9 @@ class RSSCollector(BaseCollector):
                     author=author[:120],
                     published_at=published_at,
                     metrics_json={"feed_title": feed_title, "category": category, "matched_query": bool(query_terms and any(matches_interest(haystack, term) for term in query_terms))},
-                    raw_json={"feed_url": feed_url, "feed_title": feed_title, "format": root.tag.split("}", 1)[-1]},
+                    # An RSS timestamp is the feed publisher's publication
+                    # time. It is not inferred to be the underlying event date.
+                    raw_json={**source_context, "format": root.tag.split("}", 1)[-1], "event_occurred_at": None},
                     route_id=route_id,
                 )
             )
