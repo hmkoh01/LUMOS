@@ -505,6 +505,13 @@ a.brand:focus,
   align-self: end;
 }
 
+.settings-info {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 4px 0 12px;
+}
+
 .source-settings-intro,
 .source-management {
   grid-column: 1 / -1;

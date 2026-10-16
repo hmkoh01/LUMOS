@@ -144,7 +144,6 @@ function setActiveTab(tab, options = {}) {
 }
 
 function bindTopActions() {
-  document.getElementById("generate-signals").addEventListener("click", () => generateSignals());
   document.getElementById("refresh-saved-signals").addEventListener("click", loadSavedSignals);
   document.getElementById("refresh-recommendations").addEventListener("click", loadRecommendationSignals);
   document.querySelectorAll("[data-recommendation-category]").forEach((button) => {
@@ -404,12 +403,12 @@ function renderSignals() {
     container.innerHTML = emptyState(
       `${periodLabel} 브리핑은 아직 없어요.`,
       state.briefingPeriod === "today"
-        ? "지금 새로 받아보면 관심사에 맞는 변화를 한국어로 정리해드릴게요."
+        ? "관심사와 소스 설정을 바탕으로 소식이 자동 수집됩니다. 잠시 후 다시 확인해보세요."
         : "이 기간에 해당하는 소식이 쌓이면 여기에서 확인할 수 있어요.",
-      state.briefingPeriod === "today" ? "소식 새로 받기" : "오늘 브리핑 보기",
-      state.briefingPeriod === "today" ? "generate" : "open-today"
+      state.briefingPeriod === "today" ? "관심사 확인하기" : "오늘 브리핑 보기",
+      state.briefingPeriod === "today" ? "open-interests" : "open-today"
     );
-    bindEmptyAction("generate", () => generateSignals());
+    bindEmptyAction("open-interests", () => switchTab("interests"));
     bindEmptyAction("open-today", () => document.querySelector('[data-period="today"]')?.click());
     return;
   }
@@ -530,9 +529,17 @@ function renderFirstRunPanel() {
 }
 
 async function generateSignals(triggerButton) {
+  // Legacy: manual generation removed in v2 engine.
+  // On first onboarding, still trigger initial pipeline for backward compatibility.
   const button = triggerButton || document.getElementById("generate-signals");
+  if (!button) {
+    // v2: no generate button; just reload existing briefing
+    await Promise.allSettled([loadSettings(), loadInterests(false), loadSignals(false)]);
+    renderSignals();
+    return;
+  }
   const original = button.textContent;
-  setBusy(button, true, "소식을 고르는 중");
+  setBusy(button, true, "소식을 준비하는 중");
   const banner = document.getElementById("generate-banner");
   if (banner) banner.classList.remove("hidden");
   try {
@@ -541,14 +548,8 @@ async function generateSignals(triggerButton) {
       method: "POST",
       body: JSON.stringify({ mode, replace_today: true }),
     });
-    if (!data.generated_signal_count) {
-      showToast((data.failed_sources || []).length || Object.keys(data.errors_by_source || {}).length
-        ? "소스 연결에 실패해 새 소식을 만들지 못했어요. 활동 탭에서 오류를 확인해주세요."
-        : "이번 수집에서는 관심사에 맞는 새 소식을 찾지 못했어요. 관심사와 소스 설정을 확인해주세요.");
-    } else if ((data.failed_sources || []).length || Object.keys(data.errors_by_source || {}).length) {
-      showToast("일부 소스에서 데이터를 가져오지 못했지만, 가능한 소스로 소식을 만들었어요.");
-    } else {
-      showToast(`관심사에 맞는 소식 ${data.generated_signal_count}개를 정리했어요.`);
+    if (data.generated_signal_count) {
+      showToast(`소식 ${data.generated_signal_count}개를 정리했어요.`);
     }
     await Promise.allSettled([loadSettings(), loadInterests(false), loadSignals(false)]);
     detectFirstRun();
@@ -1285,8 +1286,6 @@ async function completeOnboarding(event) {
     const roleCustom = document.getElementById("onboarding-role-custom").value.trim();
     const role = roleCustom || state.onboardingRole;
     const signalCount = Number(document.getElementById("onboarding-signal-count").value || 3);
-    const briefingTime = document.getElementById("onboarding-briefing-time").value || "08:00";
-    const mode = document.querySelector("input[name='onboarding-mode']:checked")?.value || "hybrid";
     const browserEnabled = document.getElementById("onboarding-browser").checked;
     const localEnabled = document.getElementById("onboarding-local").checked;
     const folders = document.getElementById("onboarding-local-folders").value.split("\n").map((line) => line.trim()).filter(Boolean);
@@ -1300,13 +1299,12 @@ async function completeOnboarding(event) {
         interest_types: state.onboardingKeywords,
         keywords: state.onboardingKeywords,
         preferred_signal_count: signalCount,
-        briefing_time: briefingTime,
         connectors: { browser_history: browserEnabled, local_files: localEnabled },
       }),
     });
     await api("/api/v1/settings", {
       method: "PUT",
-      body: JSON.stringify({ generate_mode: mode, signal_count: signalCount, briefing_time: briefingTime }),
+      body: JSON.stringify({ signal_count: signalCount }),
     });
     await api("/api/v1/sources/configs/seed-defaults", { method: "POST", body: JSON.stringify({ overwrite: false }) });
     await Promise.allSettled([loadProfile(), loadSettings(), loadConnectors(), loadInterests(false)]);
@@ -1324,7 +1322,6 @@ async function completeOnboarding(event) {
 async function saveSettings(event) {
   event.preventDefault();
   const scrollPosition = captureScrollPosition();
-  const selectedMode = document.querySelector("input[name='generate-mode']:checked")?.value || "hybrid";
   const submit = event.submitter || event.currentTarget.querySelector("button[type='submit']");
   const original = submit.textContent;
   setBusy(submit, true, "저장 중");
@@ -1333,9 +1330,6 @@ async function saveSettings(event) {
       method: "PUT",
       body: JSON.stringify({
         signal_count: Number(document.getElementById("setting-signal-count").value),
-        briefing_time: document.getElementById("setting-briefing-time").value || "08:00",
-        mode_enabled: document.getElementById("setting-auto-briefing").checked,
-        generate_mode: selectedMode,
       }),
     });
     showToast("설정을 저장했어요");
@@ -1354,10 +1348,16 @@ function renderSettings() {
   renderGateSummary();
   setValue("setting-signal-count", state.settings.signal_count || 3);
   renderSignalCountGateNote();
-  setValue("setting-briefing-time", state.settings.briefing_time || "08:00");
-  setChecked("setting-auto-briefing", state.settings.mode_enabled !== false);
-  const modeInput = document.querySelector(`input[name="generate-mode"][value="${state.settings.generate_mode || "hybrid"}"]`);
-  if (modeInput) modeInput.checked = true;
+  // Hide the 7-option if free plan limit is 5
+  const option7 = document.getElementById("signal-count-option-7");
+  if (option7) {
+    const signalGate = (state.featureGates?.gates || []).find((gate) => gate.feature_key === "today_signal_count");
+    const limit = Number(signalGate?.limit_value || 5);
+    if (limit <= 5) {
+      option7.disabled = true;
+      option7.textContent = "7개 (상위 플랜)";
+    }
+  }
 }
 
 function initAuthShell() {

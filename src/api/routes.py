@@ -17,6 +17,7 @@ from src.api.signals import router as signals_router
 from src.api.sources import router as sources_router
 from src.api.beta_feedback import router as beta_feedback_router
 from src.api.chat import router as chat_router
+from src.api.engine import router as engine_router
 
 
 def _dev_routes_enabled() -> bool:
@@ -46,6 +47,7 @@ router.include_router(pipeline_runs_router)
 router.include_router(sources_router)
 router.include_router(chat_router)
 router.include_router(beta_feedback_router)
+router.include_router(engine_router)
 
 # Dev-only routes — not registered in production (supabase mode without LUMOS_DEV_MODE=true).
 if _dev_routes_enabled():

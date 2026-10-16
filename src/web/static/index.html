@@ -49,8 +49,7 @@
               <h2 id="signals-title">중요한 변화만, 한눈에</h2>
               <p class="briefing-intro">선택한 관심사와 소스를 바탕으로 정리한 브리핑입니다.</p>
             </div>
-            <div class="hero-actions">
-              <button class="button primary" id="generate-signals">소식 새로 받기</button>
+            <div class="hero-actions" id="hero-actions">
             </div>
           </div>
           <div class="briefing-toolbar">
@@ -62,7 +61,7 @@
           </div>
           <div id="first-run-panel"></div>
           <div class="generate-banner hidden" id="generate-banner" role="status" aria-live="polite">
-            <span class="spinner"></span> 새 소식을 확인하고 있어요…
+            <span class="spinner"></span> 브리핑을 준비하고 있어요…
           </div>
           <div id="signals-list" class="stack"></div>
         </section>
@@ -221,41 +220,16 @@
             <div class="card">
               <div class="card-title"><h3>브리핑</h3></div>
               <label class="form-group">
-                <span>받을 소식 개수</span>
+                <span>브리핑에 표시할 소식 개수</span>
                 <select id="setting-signal-count">
                   <option value="1">1개</option>
                   <option value="3">3개</option>
                   <option value="5">5개</option>
-                  <option value="7">7개</option>
+                  <option value="7" id="signal-count-option-7">7개</option>
                 </select>
                 <small id="signal-count-gate-note" class="soft-warning"></small>
               </label>
-              <label class="form-group">
-                <span>브리핑 시간</span>
-                <input id="setting-briefing-time" type="time" />
-              </label>
-              <label class="toggle-row">
-                <span>자동 브리핑 켜기</span>
-                <input id="setting-auto-briefing" type="checkbox" />
-              </label>
-            </div>
-
-            <div class="card">
-              <div class="card-title"><h3>소식 생성 방식</h3></div>
-              <div class="mode-list">
-                <label class="mode-option">
-                  <input type="radio" name="generate-mode" value="mock" />
-                  <span><strong>안정 모드</strong></span>
-                </label>
-                <label class="mode-option">
-                  <input type="radio" name="generate-mode" value="hybrid" />
-                  <span><strong>혼합 모드</strong></span>
-                </label>
-                <label class="mode-option">
-                  <input type="radio" name="generate-mode" value="live" />
-                  <span><strong>실제 소스 모드</strong></span>
-                </label>
-              </div>
+              <p class="settings-info">소식은 관심사와 소스 설정을 바탕으로 자동으로 수집됩니다. 수집 주기와 방식은 서비스가 자동으로 결정합니다.</p>
               <button class="button primary full" type="submit">설정 저장</button>
             </div>
           </form>
@@ -317,34 +291,15 @@
           <section class="onboarding-step" data-step="3">
             <h3>어떻게 받을까요?</h3>
             <p>개인 맥락은 사용자가 켠 경우에만 사용해요. 원문 전체가 아니라 소식을 고르기 위한 일부 요약과 키워드 중심으로 참고합니다.</p>
-            <div class="form-grid">
-              <label class="form-group">
-                <span>받을 소식 개수</span>
-                <select id="onboarding-signal-count">
-                  <option value="1">1개</option>
-                  <option value="3" selected>3개</option>
-                  <option value="5">5개</option>
-                </select>
-              </label>
-              <label class="form-group">
-                <span>브리핑 시간</span>
-                <input id="onboarding-briefing-time" type="time" value="08:00" />
-              </label>
-            </div>
-            <div class="mode-list compact">
-              <label class="mode-option">
-                <input type="radio" name="onboarding-mode" value="mock" />
-                <span><strong>안정 모드</strong><small>샘플 데이터로 안정적으로 시작해요.</small></span>
-              </label>
-              <label class="mode-option">
-                <input type="radio" name="onboarding-mode" value="hybrid" checked />
-                <span><strong>혼합 모드</strong><small>가능한 실제 소스를 함께 사용해요.</small></span>
-              </label>
-              <label class="mode-option">
-                <input type="radio" name="onboarding-mode" value="live" />
-                <span><strong>실제 소스 모드</strong><small>연결된 실제 소스만 사용해요.</small></span>
-              </label>
-            </div>
+            <label class="form-group">
+              <span>받을 소식 개수</span>
+              <select id="onboarding-signal-count">
+                <option value="1">1개</option>
+                <option value="3" selected>3개</option>
+                <option value="5">5개</option>
+              </select>
+            </label>
+            <p class="settings-info">소식은 관심사를 기반으로 자동 수집되며, 매일 아침 새로운 브리핑이 준비됩니다.</p>
             <label class="toggle-row">
               <span>브라우저 기록 사용</span>
               <input id="onboarding-browser" type="checkbox" />
