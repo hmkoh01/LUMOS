@@ -74,9 +74,30 @@ class MockLLMProvider(LLMProvider):
 
     @staticmethod
     def _default_response(request: LLMRequest) -> str:
-        """Generate a plausible Korean briefing response."""
-        return (
-            '{"display_title_ko": "모의 한국어 제목",'
-            ' "headline_summary_ko": "이것은 테스트용 한국어 요약입니다.",'
-            ' "key_facts_ko": ["사실 1", "사실 2"]}'
-        )
+        """Generate a plausible Korean briefing response.
+
+        Detects batched prompts (multiple [N] items) and returns
+        an array with one entry per item.
+        """
+        # Count items in the prompt to produce matching batch output
+        item_count = request.prompt.count("[") // 2 or 1  # rough heuristic
+        # More precise: count "[N]" patterns
+        import re
+        markers = re.findall(r"\[\d+\]", request.prompt)
+        n = len(markers) if markers else 1
+
+        if n == 1:
+            return (
+                '{"display_title_ko": "모의 한국어 제목",'
+                ' "headline_summary_ko": "이것은 테스트용 한국어 요약입니다.",'
+                ' "key_facts_ko": ["사실 1", "사실 2"]}'
+            )
+        import json
+        items = []
+        for i in range(n):
+            items.append({
+                "display_title_ko": f"모의 한국어 제목 {i+1}",
+                "headline_summary_ko": f"이것은 테스트용 한국어 요약입니다. 항목 {i+1}번 설명.",
+                "key_facts_ko": [f"사실 {i+1}-1", f"사실 {i+1}-2"],
+            })
+        return json.dumps(items, ensure_ascii=False)

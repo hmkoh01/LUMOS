@@ -68,6 +68,7 @@ def perform_backfill(
         )
 
     replacement_key = candidate.candidate.dedupe_key
+    currently_displayed.add(replacement_key)
     cached_briefing = cache.get(replacement_key)
 
     return BackfillResult(
