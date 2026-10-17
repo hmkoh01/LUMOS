@@ -48,6 +48,19 @@ class RuntimeSmokeTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("text/html", r.headers.get("content-type", ""))
 
+    def test_brand_images_are_available_on_pages_and_legacy_routes(self):
+        for page in ("/", "/app"):
+            self.assertIn('/static/logo.png?', self.client.get(page).text)
+        self.assertIn('/static/icon.png?', self.client.get('/app').text)
+        for name in ("logo", "icon"):
+            static = self.client.get(f"/static/{name}.png")
+            legacy = self.client.get(f"/{name}.png")
+            self.assertEqual(static.status_code, 200)
+            self.assertEqual(static.headers["content-type"], "image/png")
+            self.assertTrue(static.content.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertEqual(legacy.status_code, 200)
+            self.assertEqual(legacy.content, static.content)
+
     def test_health_returns_ok(self):
         r = self.client.get("/health")
         self.assertEqual(r.status_code, 200)
