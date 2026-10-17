@@ -1,0 +1,64 @@
+/* Layered refinements for the landing-page briefing preview. */
+.product-preview {
+  position: relative;
+  overflow: hidden;
+  padding: 20px;
+  border: 1px solid rgba(192, 210, 234, .9);
+  border-radius: 30px;
+  background: #fff;
+  box-shadow: 0 28px 72px rgba(17, 42, 84, .15), 0 3px 8px rgba(17, 42, 84, .04);
+}
+
+.preview-top { position: relative; padding: 3px 4px 20px; }
+.preview-identity { display: inline-flex; align-items: center; gap: 8px; }
+.preview-mark { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 8px; background: #173b76; color: #fff; font-size: 12px; font-weight: 850; letter-spacing: -.04em; box-shadow: 0 5px 10px rgba(16, 42, 92, .2); }
+.preview-brand { font-size: 14px; font-weight: 850; letter-spacing: -.045em; }
+.preview-date { padding: 4px 8px; border: 1px solid #e4eaf3; border-radius: 999px; background: rgba(255, 255, 255, .7); color: #7b899c; font-size: 11px; font-weight: 650; }
+
+.preview-tabs { position: relative; gap: 3px; padding: 4px; border: 1px solid #e7edf5; border-radius: 13px; background: rgba(233, 240, 250, .72); }
+.preview-tabs span { padding: 8px 7px; font-size: 12px; }
+.preview-tabs .active { box-shadow: 0 3px 9px rgba(42, 75, 125, .14); }
+
+.signal-preview { position: relative; }
+.signal-preview.featured { margin-top: 14px; padding: 21px; border-color: #dce8f7; border-radius: 20px; background: #f7faff; box-shadow: 0 8px 20px rgba(44, 91, 153, .06); }
+.signal-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.signal-preview .signal-kicker { margin: 0 !important; color: #3677c8 !important; font-size: 10px !important; }
+.signal-status { padding: 4px 7px; border-radius: 6px; background: #dceeff; color: #245a9e; font-size: 10px; font-weight: 800; }
+.signal-preview.featured h3 { max-width: 390px; margin-top: 13px; font-size: 20px; line-height: 1.32; letter-spacing: -.045em; }
+.signal-preview.featured > p { margin: 10px 0 17px; font-size: 13px; line-height: 1.6; }
+.signal-preview .signal-relevance { display: grid; grid-template-columns: 25px minmax(0, 1fr); align-items: center; gap: 9px; padding: 12px 0 0; border-top: 1px solid #dce7f4; }
+.relevance-icon { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 8px; background: #dceeff; color: #3677c8 !important; font-size: 12px !important; }
+.signal-relevance > div { display: grid; gap: 1px; padding: 0 !important; border: 0 !important; }
+.signal-relevance span:not(.relevance-icon) { color: #8090a6; font-size: 10px; font-weight: 700; }
+.signal-relevance b { color: #294565; font-size: 12px; letter-spacing: -.02em; }
+
+.signal-preview.compact { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 12px; align-items: center; margin-top: 10px; padding: 15px 13px; border-color: #e1e8f1; border-radius: 16px; background: rgba(255, 255, 255, .82); }
+.compact .rank { width: 30px; height: 30px; border-radius: 9px; background: #edf4ff; color: #3677c8; font-size: 11px; }
+.compact h3 { font-size: 14px; line-height: 1.35; letter-spacing: -.025em; }
+.compact p { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 5px 0 0; color: #8090a6; font-size: 10px; }
+.source-dot { display: inline-block; width: 3px; height: 3px; border-radius: 50%; background: #94b5dc; }
+.arrow-link { color: #5e7fa9; font-size: 17px; }
+.preview-footer { display: flex; align-items: center; justify-content: space-between; padding: 15px 4px 1px; color: #8290a4; font-size: 10px; font-weight: 700; }
+.preview-footer > span:first-child { display: inline-flex; align-items: center; gap: 5px; color: #5e789b; }
+.preview-footer i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #57b98a; box-shadow: 0 0 0 3px #e6f8ee; }
+
+/* Keep the lower preference card in the same light-surface family as the preview. */
+.personalization-card {
+  padding: 20px 24px;
+  border: 1px solid rgba(192, 210, 234, .9);
+  border-radius: 24px;
+  background: #fff;
+  color: #14233d;
+  box-shadow: 0 20px 48px rgba(17, 42, 84, .1);
+}
+
+.personalization-card .card-label { padding-top: 0; color: #3677c8 !important; }
+.personalization-card .preference { gap: 5px; border-color: #e7edf5; }
+.personalization-card .preference span { color: #728198; }
+.personalization-card .preference b { color: #243b5b; }
+
+@media (max-width: 500px) {
+  .product-preview { padding: 14px; border-radius: 23px; }
+  .signal-preview.featured { padding: 17px; }
+  .signal-preview.featured h3 { font-size: 18px; }
+}
