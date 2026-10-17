@@ -30,6 +30,8 @@ const state = {
   },
   cloudAccount: null,
   featureGates: null,
+  engineV2: false,
+  lastDismiss: null,
 };
 
 const sourceCopy = {
@@ -263,11 +265,20 @@ function bindOnboarding() {
 
 async function loadInitialData() {
   showLoading("signals-list", "오늘의 소식을 확인하고 있어요.");
-  await Promise.allSettled([loadProfile(), loadSettings(), loadConnectors(), loadSources(), loadInterests(false), loadSignals(false)]);
+  await Promise.allSettled([loadProfile(), loadSettings(), loadConnectors(), loadSources(), loadInterests(false), loadSignals(false), loadEngineStatus()]);
   detectFirstRun();
   renderFirstRunPanel();
   renderSettings();
   renderSignals();
+}
+
+async function loadEngineStatus() {
+  try {
+    const data = await api("/api/v1/engine/status");
+    state.engineV2 = Boolean(data.enabled);
+  } catch (_) {
+    state.engineV2 = false;
+  }
 }
 
 async function loadTab(tab) {
@@ -738,23 +749,112 @@ function toggleRecommendationMenu(button) {
 
 async function setRecommendationPreference(button) {
   const card = button.closest(".signal-card");
+  const signalId = card.dataset.signalId;
   const preference = button.dataset.setPreference;
   const current = card.querySelector("[data-set-preference].selected")?.dataset.setPreference || null;
   const next = current === preference ? null : preference;
   button.disabled = true;
+  closeRecommendationMenus();
+
+  // Engine v2 dismiss path: remove card, backfill, show undo toast.
+  if (state.engineV2 && next === "ignored") {
+    try {
+      const data = await api("/api/v1/engine/briefing/dismiss", {
+        method: "POST",
+        body: JSON.stringify({ signal_id: Number(signalId), period: state.briefingPeriod || "today" }),
+      });
+      const dismissedIndex = state.signals.findIndex((s) => String(s.id) === String(signalId));
+      const dismissedSignal = dismissedIndex >= 0 ? state.signals[dismissedIndex] : null;
+
+      // Remove dismissed card from current view.
+      if (dismissedIndex >= 0) state.signals.splice(dismissedIndex, 1);
+
+      // Insert replacement at the same position if available.
+      const replacement = data.replacement;
+      if (replacement) {
+        const insertAt = Math.min(dismissedIndex >= 0 ? dismissedIndex : state.signals.length, state.signals.length);
+        state.signals.splice(insertAt, 0, replacement);
+      }
+      renderSignals();
+
+      // Show toast with undo action.
+      state.lastDismiss = { signalId, dismissedSignal, dismissedIndex, replacement };
+      showToastWithUndo("비슷한 소식을 줄일게요.", async () => {
+        try {
+          await api("/api/v1/engine/briefing/undo-dismiss", {
+            method: "POST",
+            body: JSON.stringify({ signal_id: Number(signalId) }),
+          });
+          // Remove replacement, restore original.
+          if (replacement) {
+            state.signals = state.signals.filter((s) => String(s.id) !== String(replacement.id));
+          }
+          if (dismissedSignal && dismissedIndex >= 0) {
+            state.signals.splice(Math.min(dismissedIndex, state.signals.length), 0, dismissedSignal);
+          }
+          state.lastDismiss = null;
+          renderSignals();
+          showToast("되돌렸어요.");
+        } catch (err) {
+          showToast(err.message || "되돌리지 못했어요.");
+        }
+      });
+    } catch (error) {
+      showToast(error.message);
+      button.disabled = false;
+    }
+    return;
+  }
+
+  // Engine v2 undo path: clearing a previous "ignored" preference.
+  if (state.engineV2 && current === "ignored" && next === null) {
+    try {
+      await api("/api/v1/engine/briefing/undo-dismiss", {
+        method: "POST",
+        body: JSON.stringify({ signal_id: Number(signalId) }),
+      });
+      showToast("추천 선택을 해제했어요.");
+      await loadSignals(false);
+      renderSignals();
+    } catch (error) {
+      showToast(error.message);
+      button.disabled = false;
+    }
+    return;
+  }
+
+  // Default v1 path (tracked, or v2 disabled).
   try {
-    await api(`/api/v1/signals/${card.dataset.signalId}/recommendation-preference`, {
+    await api(`/api/v1/signals/${signalId}/recommendation-preference`, {
       method: "PUT",
       body: JSON.stringify({ preference: next }),
     });
     showToast(next === "tracked" ? "비슷한 소식을 더 추천할게요." : next === "ignored" ? "비슷한 소식을 줄일게요." : "추천 선택을 해제했어요.");
-    closeRecommendationMenus();
     await loadSignals(false);
     renderSignals();
   } catch (error) {
     showToast(error.message);
     button.disabled = false;
   }
+}
+
+function showToastWithUndo(message, onUndo) {
+  const toast = document.getElementById("toast");
+  toast.innerHTML = "";
+  toast.appendChild(document.createTextNode(message + " "));
+  const undoBtn = document.createElement("button");
+  undoBtn.className = "toast-undo";
+  undoBtn.type = "button";
+  undoBtn.textContent = "실행 취소";
+  undoBtn.addEventListener("click", () => {
+    toast.classList.remove("show");
+    clearTimeout(showToast.timer);
+    onUndo();
+  });
+  toast.appendChild(undoBtn);
+  toast.classList.add("show");
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => toast.classList.remove("show"), 5000);
 }
 
 document.addEventListener("click", (event) => {
