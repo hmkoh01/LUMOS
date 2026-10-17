@@ -747,29 +747,43 @@ function toggleRecommendationMenu(button) {
   button.setAttribute("aria-expanded", String(opening));
 }
 
+// Per-card lock: prevents double-click and ensures sequential processing.
+const _dismissLocks = new Set();
+let _dismissGeneration = 0;
+
 async function setRecommendationPreference(button) {
   const card = button.closest(".signal-card");
   const signalId = card.dataset.signalId;
   const preference = button.dataset.setPreference;
   const current = card.querySelector("[data-set-preference].selected")?.dataset.setPreference || null;
   const next = current === preference ? null : preference;
+
+  // Per-card lock: reject if this card already has an in-flight request.
+  if (_dismissLocks.has(signalId)) return;
+  _dismissLocks.add(signalId);
   button.disabled = true;
   closeRecommendationMenus();
 
-  // Engine v2 dismiss path: remove card, backfill, show undo toast.
-  if (state.engineV2 && next === "ignored") {
-    try {
+  // Capture the period at call time — if it changes mid-flight, discard stale results.
+  const callPeriod = state.briefingPeriod;
+  const callGeneration = ++_dismissGeneration;
+
+  try {
+    // Engine v2 dismiss path: remove card, backfill, show undo toast.
+    if (state.engineV2 && next === "ignored") {
       const data = await api("/api/v1/engine/briefing/dismiss", {
         method: "POST",
-        body: JSON.stringify({ signal_id: Number(signalId), period: state.briefingPeriod || "today" }),
+        body: JSON.stringify({ signal_id: Number(signalId), period: callPeriod || "today" }),
       });
+
+      // Discard if period changed while awaiting.
+      if (state.briefingPeriod !== callPeriod) return;
+
       const dismissedIndex = state.signals.findIndex((s) => String(s.id) === String(signalId));
       const dismissedSignal = dismissedIndex >= 0 ? state.signals[dismissedIndex] : null;
 
-      // Remove dismissed card from current view.
       if (dismissedIndex >= 0) state.signals.splice(dismissedIndex, 1);
 
-      // Insert replacement at the same position if available.
       const replacement = data.replacement;
       if (replacement) {
         const insertAt = Math.min(dismissedIndex >= 0 ? dismissedIndex : state.signals.length, state.signals.length);
@@ -777,15 +791,15 @@ async function setRecommendationPreference(button) {
       }
       renderSignals();
 
-      // Show toast with undo action.
-      state.lastDismiss = { signalId, dismissedSignal, dismissedIndex, replacement };
+      state.lastDismiss = { signalId, dismissedSignal, dismissedIndex, replacement, generation: callGeneration };
       showToastWithUndo("비슷한 소식을 줄일게요.", async () => {
+        // Stale check: if another dismiss happened after this one, skip undo.
+        if (state.lastDismiss?.generation !== callGeneration) return;
         try {
           await api("/api/v1/engine/briefing/undo-dismiss", {
             method: "POST",
             body: JSON.stringify({ signal_id: Number(signalId) }),
           });
-          // Remove replacement, restore original.
           if (replacement) {
             state.signals = state.signals.filter((s) => String(s.id) !== String(replacement.id));
           }
@@ -799,42 +813,36 @@ async function setRecommendationPreference(button) {
           showToast(err.message || "되돌리지 못했어요.");
         }
       });
-    } catch (error) {
-      showToast(error.message);
-      button.disabled = false;
+      return;
     }
-    return;
-  }
 
-  // Engine v2 undo path: clearing a previous "ignored" preference.
-  if (state.engineV2 && current === "ignored" && next === null) {
-    try {
+    // Engine v2 undo path: clearing a previous "ignored" preference.
+    if (state.engineV2 && current === "ignored" && next === null) {
       await api("/api/v1/engine/briefing/undo-dismiss", {
         method: "POST",
         body: JSON.stringify({ signal_id: Number(signalId) }),
       });
+      if (state.briefingPeriod !== callPeriod) return;
       showToast("추천 선택을 해제했어요.");
       await loadSignals(false);
       renderSignals();
-    } catch (error) {
-      showToast(error.message);
-      button.disabled = false;
+      return;
     }
-    return;
-  }
 
-  // Default v1 path (tracked, or v2 disabled).
-  try {
+    // Default v1 path (tracked, or v2 disabled).
     await api(`/api/v1/signals/${signalId}/recommendation-preference`, {
       method: "PUT",
       body: JSON.stringify({ preference: next }),
     });
+    if (state.briefingPeriod !== callPeriod) return;
     showToast(next === "tracked" ? "비슷한 소식을 더 추천할게요." : next === "ignored" ? "비슷한 소식을 줄일게요." : "추천 선택을 해제했어요.");
     await loadSignals(false);
     renderSignals();
   } catch (error) {
     showToast(error.message);
     button.disabled = false;
+  } finally {
+    _dismissLocks.delete(signalId);
   }
 }
 

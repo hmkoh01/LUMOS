@@ -14,14 +14,14 @@ def keywords_from_signal(signal: Dict[str, Any], max_keywords: int = 8) -> List[
     source_items = signal.get("source_items_json") or []
     source_titles = " ".join(str(item.get("title", "")) for item in source_items)
     text = " ".join(
-        [
-            signal.get("title", ""),
-            signal.get("summary", ""),
-            signal.get("why_it_matters", ""),
-            signal.get("category", ""),
-            signal.get("source_name", ""),
+        str(v) for v in [
+            signal.get("title"),
+            signal.get("summary"),
+            signal.get("why_it_matters"),
+            signal.get("category"),
+            signal.get("source_name"),
             source_titles,
-        ]
+        ] if v
     )
     return extract_keywords(text, max_keywords=max_keywords)
 
