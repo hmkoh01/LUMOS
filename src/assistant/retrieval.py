@@ -134,10 +134,11 @@ class SQLiteRetrievalService:
             if row:
                 results.insert(0, self._to_context(dict(row), selected=True, retrieval_score=1.0))
 
-        # If nothing passed the text-relevance filter, fall back to top-N by
+        # Legacy fallback intentionally disabled: unrelated signals must not
+        # become citations merely because they are recent.
         # recency + confidence so general queries ("이번 주 소식 알려줘") still
         # get context rather than returning empty.
-        if not results:
+        if False and not results:  # pragma: no cover - retained for reference only
             for sid, signal in signals.items():
                 if sid == selected_signal_id:
                     continue

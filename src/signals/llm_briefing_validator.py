@@ -15,6 +15,16 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
+from src.signals.card_presentation import prepare_card_title
+
+
+_PRODUCT_AVAILABILITY_LANGUAGE = re.compile(
+    r"(?:\ucd9c\uc2dc|public(?:ly)?\s+available|product\s+release|\brelease\b|\blaunch\b)", re.I
+)
+_SOURCE_AVAILABILITY_EVIDENCE = re.compile(
+    r"(?:public(?:ly)?\s+available|product\s+release|\breleased\b|\blaunched\b|\uCD9C\uC2DC)", re.I
+)
+
 
 _REQUIRED_CONTENT_FIELDS = [
     "display_title_ko",
@@ -26,10 +36,37 @@ _REQUIRED_CONTENT_FIELDS = [
 ]
 
 _REQUIRED_PERSONALIZE_FIELDS = [
+    "source_facts_ko",
+    "user_relevance_ko",
     "recommendation_reason_ko",
     "why_it_matters_ko",
     "recommended_action_ko",
 ]
+
+# Outcome claims require explicit evidence in the cited source, rather than
+# mere keyword overlap with a feature description.
+_EFFECT_PATTERNS = [
+    ("performance", re.compile(r"(?:성능|처리\s*속도|속도).{0,12}(?:향상|개선|최적화|빨라)"),
+     re.compile(r"(?:performance|latency|throughput|faster|speed).{0,40}(?:improv|reduc|faster|increase)|(?:improv|reduc|faster|increase).{0,40}(?:performance|latency|throughput|speed)", re.I)),
+    ("stability", re.compile(r"(?:안정성|신뢰성).{0,16}(?:향상|개선|보장)|(?:안정화|안정적으로)"),
+     re.compile(r"(?:stability|reliability).{0,40}(?:improv|enhanc|guarantee)|(?:improv|enhanc|guarantee).{0,40}(?:stability|reliability)", re.I)),
+    ("bug_fix", re.compile(r"(?:오류|버그).{0,12}(?:해결|수정|제거|방지)"),
+     re.compile(r"(?:fix|resolve|prevent).{0,40}(?:error|bug)|(?:error|bug).{0,40}(?:fix|resolve|prevent)", re.I)),
+    ("optimization", re.compile(r"(?:최적화|효율화)"),
+     re.compile(r"(?:optimi[sz]|efficien)", re.I)),
+    ("guarantee", re.compile(r"(?:보장|반드시|확실하게).{0,12}(?:개선|향상|해결|방지)?"),
+     re.compile(r"(?:guarantee|ensure|always|prevent)", re.I)),
+]
+
+_GENERIC_RECOMMENDATION_START = re.compile(
+    r"^\s*(?:요청하신|관심\s*분야의|AI\s*에이전트\s*관련|개발\s*분야의).{0,100}(?:소식|뉴스)(?:입니다|이에요)",
+)
+
+_GENERIC_RELEASE_TITLE = re.compile(
+    r"^\s*[A-Za-z][A-Za-z0-9 ._-]*(?:v?\d[\w.-]*)?\s*(?:버전\s*)?(?:출시|릴리스)\s*$",
+)
+
+_DEPLOYMENT_DIRECTIVE = re.compile(r"(?:업데이트|도입|적용|마이그레이션)(?:하세요|하십시오|해보세요)")
 
 # Common English words that should NOT be treated as named entities.
 _COMMON_WORDS = {
@@ -66,11 +103,35 @@ def validate_content_briefing(
 
     # 2. Title length
     title = briefing.get("display_title_ko", "")
-    checks["title_length"] = {"length": len(title), "pass": 0 < len(title) <= 80}
-    if len(title) > 80:
-        warnings.append(f"제목 과장: {len(title)}자 (목표 <=52)")
+    title_presentation = prepare_card_title(title)
+    checks["title_length"] = {"length": len(title), "pass": 0 < len(title) <= 52}
+    checks["title_presentation"] = {
+        "display_title_ko": title_presentation.text,
+        "display_mode": title_presentation.display_mode,
+        "shortened": title_presentation.shortened,
+        "pass": bool(title_presentation.text),
+    }
+    if len(title) > 52:
+        # A title length is a card layout decision, not evidence that its
+        # grounded facts are wrong.  Keep the validated content and render the
+        # complete title across two lines when no safe shortening exists.
+        warnings.append(f"제목 2줄 표시: {len(title)}자 (단일 줄 목표 52자)")
     if not title:
         issues.append("빈 제목")
+
+    # An internal engineering article can describe a deployed internal system;
+    # that is not evidence of a public product release.  "Introduces" remains
+    # allowed, while explicit availability wording requires source support.
+    source_text = f"{source_item.get('title', '')} {source_item.get('summary', '')}"
+    availability_claimed = bool(_PRODUCT_AVAILABILITY_LANGUAGE.search(title))
+    availability_supported = bool(_SOURCE_AVAILABILITY_EVIDENCE.search(source_text))
+    checks["availability_language"] = {
+        "pass": not availability_claimed or availability_supported,
+        "claimed": availability_claimed,
+        "source_supported": availability_supported,
+    }
+    if availability_claimed and not availability_supported:
+        issues.append("unverified public-product availability language in title")
 
     # 3. Summary length
     summary = briefing.get("display_summary_ko", "")
@@ -81,7 +142,6 @@ def validate_content_briefing(
         issues.append("빈 요약")
 
     # 4. Entity preservation
-    source_text = f"{source_item.get('title', '')} {source_item.get('summary', '')}"
     entities = _extract_entities(source_text)
     briefing_text = _collect_briefing_text(briefing)
 
@@ -105,7 +165,10 @@ def validate_content_briefing(
     # 5. Number fabrication
     source_numbers = set(_extract_numbers(source_text))
     briefing_numbers = set(_extract_numbers(briefing_text))
-    fabricated = {n for n in (briefing_numbers - source_numbers) if not _is_trivial_number(n)}
+    fabricated = {
+        n for n in (briefing_numbers - source_numbers)
+        if not _is_trivial_number(n) and not _is_version_component(n, source_numbers)
+    }
     checks["number_fabrication"] = {
         "source_numbers": list(source_numbers),
         "briefing_numbers": list(briefing_numbers),
@@ -121,10 +184,25 @@ def validate_content_briefing(
         grounding_results = _verify_grounding(grounded_facts, source_text)
         checks["fact_grounding"] = grounding_results
         ungrounded = [r for r in grounding_results["details"] if not r["quote_found"]]
+        overstated = [r for r in grounding_results["details"] if not r["meaning_supported"]]
         if ungrounded:
             warnings.append(f"근거 미확인 주장 {len(ungrounded)}건 (LLM이 인용한 문구가 원문에 없음)")
+        if overstated:
+            issues.append(f"원문 근거를 넘어선 효과 주장 {len(overstated)}건")
     else:
         checks["fact_grounding"] = {"verified": 0, "unverified": 0, "details": []}
+
+    # A release title must surface a confirmed change when such facts exist;
+    # otherwise the title has no briefing value beyond the source title.
+    generic_release_title = bool(_GENERIC_RELEASE_TITLE.fullmatch(title))
+    title_has_grounded_change = bool(grounded_facts)
+    checks["title_change_specificity"] = {
+        "pass": not (generic_release_title and title_has_grounded_change),
+        "generic_release_title": generic_release_title,
+        "grounded_change_available": title_has_grounded_change,
+    }
+    if generic_release_title and title_has_grounded_change:
+        issues.append("제목이 확인된 핵심 변경을 전달하지 않음")
 
     # 7. Summary-recommendation overlap
     rec = briefing.get("recommendation_reason_ko", "")
@@ -166,6 +244,53 @@ def validate_personalization(
     confidence = personalization.get("relevance_confidence", "")
     checks["has_confidence"] = {"pass": confidence in ("high", "medium", "low"), "value": confidence}
 
+    evidence = " ".join(
+        fact.get("source_quote", "") for fact in content_briefing.get("grounded_facts", [])
+    )
+    effect_claims = _unsupported_effect_claims(
+        " ".join([
+            personalization.get("source_facts_ko", ""),
+            personalization.get("user_relevance_ko", ""), rec,
+            personalization.get("why_it_matters_ko", ""),
+            personalization.get("recommended_action_ko", ""),
+        ]), evidence,
+    )
+    checks["effect_claim_fidelity"] = {"pass": not effect_claims, "unsupported": effect_claims}
+    if effect_claims:
+        issues.append("원문 근거 없이 효과를 단정한 추천 문장")
+
+    directive_text = " ".join([
+        rec, personalization.get("why_it_matters_ko", ""), personalization.get("recommended_action_ko", ""),
+    ])
+    deployment_directive = bool(_DEPLOYMENT_DIRECTIVE.search(directive_text))
+    checks["no_unverified_deployment_directive"] = {"pass": not deployment_directive}
+    if deployment_directive:
+        issues.append("사용자 환경 확인 없이 배포·업데이트를 지시한 문장")
+
+    context_first = not bool(_GENERIC_RECOMMENDATION_START.search(rec))
+    checks["specific_context_first"] = {"pass": context_first, "text": rec[:100]}
+    if not context_first:
+        warnings.append("추천 이유가 일반적인 분야 소개로 시작함")
+
+    # A recommendation must identify at least one source-specific anchor when
+    # the content has named entities or versioned facts.  This prevents a
+    # factually safe but unhelpfully generic topic recommendation such as
+    # "related tooling is worth reviewing".
+    anchors = []
+    for entity in content_briefing.get("key_entities", []):
+        normalized = str(entity).strip()
+        if len(normalized) >= 3:
+            anchors.append(normalized)
+    anchors.extend(re.findall(r"\bv?\d+(?:\.\d+)+\b", " ".join([
+        personalization.get("source_facts_ko", ""),
+        content_briefing.get("display_title_ko", ""),
+    ])))
+    anchors = list(dict.fromkeys(anchors))
+    detail_anchor_present = not anchors or any(anchor.lower() in rec.lower() for anchor in anchors)
+    checks["source_detail_anchor"] = {"pass": detail_anchor_present, "anchors": anchors[:6]}
+    if not detail_anchor_present:
+        issues.append("추천 이유에 원문 변경을 식별할 구체적 근거가 없음")
+
     return {"valid": len(issues) == 0, "issues": issues, "warnings": warnings, "checks": checks}
 
 
@@ -193,7 +318,7 @@ def _verify_grounding(
 
         if not quote:
             details.append({
-                "claim": claim, "source_quote": "", "quote_found": False,
+                "claim": claim, "source_quote": "", "quote_found": False, "meaning_supported": False,
                 "type": fact_type, "note": "인용 없음",
             })
             unverified += 1
@@ -203,7 +328,7 @@ def _verify_grounding(
         quote_words = set(w for w in quote.lower().split() if len(w) > 2)
         if not quote_words:
             details.append({
-                "claim": claim, "source_quote": quote, "quote_found": False,
+                "claim": claim, "source_quote": quote, "quote_found": False, "meaning_supported": False,
                 "type": fact_type, "note": "인용이 너무 짧음",
             })
             unverified += 1
@@ -213,11 +338,14 @@ def _verify_grounding(
         found_words = sum(1 for w in quote_words if w in source_lower)
         match_ratio = found_words / len(quote_words)
         quote_found = match_ratio >= 0.6
+        unsupported_effects = _unsupported_effect_claims(claim, quote)
 
         details.append({
             "claim": claim,
             "source_quote": quote[:100],
             "quote_found": quote_found,
+            "meaning_supported": quote_found and not unsupported_effects,
+            "unsupported_effects": unsupported_effects,
             "match_ratio": round(match_ratio, 2),
             "type": fact_type,
         })
@@ -228,6 +356,20 @@ def _verify_grounding(
             unverified += 1
 
     return {"verified": verified, "unverified": unverified, "details": details}
+
+
+def _unsupported_effect_claims(claim: str, source_evidence: str) -> List[str]:
+    """Find outcome claims that the cited evidence does not explicitly state."""
+    unsupported = []
+    for category, claim_pattern, evidence_pattern in _EFFECT_PATTERNS:
+        matches = list(claim_pattern.finditer(claim))
+        asserted = any(
+            not re.search(r"(?:않|없)", claim[match.end():match.end() + 48])
+            for match in matches
+        )
+        if asserted and not evidence_pattern.search(source_evidence):
+            unsupported.append(category)
+    return unsupported
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +427,11 @@ def _is_trivial_number(num_str: str) -> bool:
         return (2020 <= n <= 2030) or n <= 5
     except ValueError:
         return False
+
+
+def _is_version_component(num_str: str, source_numbers: set) -> bool:
+    """Do not flag ``24`` when a source version already contains ``24.0``."""
+    return any(source.startswith(f"{num_str}.") or source.endswith(f".{num_str}") for source in source_numbers)
 
 
 def _text_overlap_ratio(text_a: str, text_b: str) -> float:

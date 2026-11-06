@@ -16,6 +16,7 @@ import os
 from typing import Dict, List, Protocol, runtime_checkable
 
 from src.assistant.retrieval import RetrievedContext
+from src.llm_safety import check_external_llm_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class ClaudeProvider:
         context_docs: List[RetrievedContext],
         history: List[Dict[str, str]],
     ) -> str:
+        check_external_llm_allowed("assistant")
         if not context_docs:
             return (
                 "선택한 기간에 관련 브리핑 소식이 없어요. "
@@ -136,6 +138,9 @@ class GeminiProvider:
         context_docs: List[RetrievedContext],
         history: List[Dict[str, str]],
     ) -> str:
+        # A configured key must never make the normal app path an implicit
+        # network client.  This is deliberately separate from the experiment.
+        check_external_llm_allowed("assistant")
         if not context_docs:
             return (
                 "선택한 기간에 관련 브리핑 소식이 없어요. "

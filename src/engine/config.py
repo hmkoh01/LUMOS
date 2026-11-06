@@ -45,6 +45,8 @@ class LLMConfig:
     max_items_per_llm_call: int = 5  # batch Korean briefing generation
     validation_confidence_threshold: float = 0.7
     expensive_model_enabled: bool = False  # disabled for free tier
+    provider: str = "mock"  # mock | agent_platform; mock remains the default
+    agent_platform_model: str = "gemini-3.5-flash-lite"
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,10 @@ class EngineConfig:
             external_calls_allowed=os.environ.get("LUMOS_EXTERNAL_CALLS", "false").lower() == "true",
             collection=CollectionConfig(
                 scheduler_enabled=os.environ.get("LUMOS_SCHEDULER_ENABLED", "false").lower() == "true",
+            ),
+            llm=LLMConfig(
+                provider=os.environ.get("LUMOS_ENGINE_LLM_PROVIDER", "mock").lower(),
+                agent_platform_model=os.environ.get("LUMOS_ENGINE_AGENT_MODEL", "gemini-3.5-flash-lite"),
             ),
             budget=BudgetConfig(
                 max_briefing_display_count=int(os.environ.get("LUMOS_MAX_BRIEFING_DISPLAY", "5")),

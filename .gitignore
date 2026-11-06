@@ -77,6 +77,7 @@ ipython_config.py
 
 # pyenv
 .python-version
+!.python-version
 
 # pipenv
 Pipfile.lock
@@ -100,6 +101,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv-agent/
 env/
 venv/
 lumos/
@@ -239,6 +241,9 @@ credentials.json
 *.xml
 data/
 datasets/
+
+# Local-only Gemini experiment fixtures, dry runs, and results
+artifacts/gemini_briefing_experiment/
 
 # Docker
 .dockerignore

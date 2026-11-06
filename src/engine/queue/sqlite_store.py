@@ -247,3 +247,28 @@ class SQLiteQueueStore(QueueStore):
             )
             conn.commit()
             return cursor.rowcount
+
+    def monitoring_summary(self) -> Dict[str, Any]:
+        """Return aggregate queue health without job payloads or error contents."""
+        with self._connect() as conn:
+            status_rows = conn.execute(
+                "SELECT job_type, status, COUNT(*) AS count FROM engine_jobs GROUP BY job_type, status"
+            ).fetchall()
+            wait_row = conn.execute(
+                """SELECT AVG((julianday(started_at) - julianday(created_at)) * 86400.0) AS avg_wait
+                   FROM engine_jobs WHERE started_at IS NOT NULL"""
+            ).fetchone()
+            executions = conn.execute(
+                "SELECT COUNT(*) FROM engine_jobs WHERE status IN ('running', 'completed', 'failed')"
+            ).fetchone()[0]
+        return {
+            "jobs": {f"{row['job_type']}:{row['status']}": row["count"] for row in status_rows},
+            "average_wait_seconds": float(wait_row["avg_wait"] or 0.0),
+            "execution_count": int(executions),
+        }
+
+    def close(self) -> None:
+        """Release the in-memory connection; file-backed operations are per-call."""
+        if self._shared_conn is not None:
+            self._shared_conn.close()
+            self._shared_conn = None

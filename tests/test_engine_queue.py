@@ -92,6 +92,16 @@ class TestSQLiteQueueStore(unittest.TestCase):
         fetched = self.store.get_job(r.id)
         self.assertEqual(fetched.status, JobStatus.FAILED)
 
+    def test_monitoring_summary_is_aggregate_only(self):
+        job = Job(job_type=JobType.GENERATE_BRIEFING, dedupe_key="monitor", max_retries=0)
+        self.store.enqueue(job)
+        claimed = self.store.claim("monitor")
+        self.store.complete(claimed.id, {"not": "reported"})
+        summary = self.store.monitoring_summary()
+        self.assertEqual(summary["jobs"]["generate_briefing:completed"], 1)
+        self.assertEqual(summary["execution_count"], 1)
+        self.assertNotIn("payload", str(summary))
+
     def test_recover_expired_leases(self):
         job = Job(job_type=JobType.COLLECT, dedupe_key="expired")
         self.store.enqueue(job)

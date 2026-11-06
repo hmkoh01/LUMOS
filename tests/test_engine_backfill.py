@@ -125,8 +125,8 @@ class TestSavedIndependentOfPreference(unittest.TestCase):
 class TestPersonaliseRankings(unittest.TestCase):
     def test_ignored_excluded(self):
         scored = [
-            ScoredCandidate(candidate=RawCandidate(dedupe_key="good"), importance_score=0.8),
-            ScoredCandidate(candidate=RawCandidate(dedupe_key="bad"), importance_score=0.9),
+            ScoredCandidate(candidate=RawCandidate(dedupe_key="good", title="AI agent release"), importance_score=0.8),
+            ScoredCandidate(candidate=RawCandidate(dedupe_key="bad", title="AI agent release"), importance_score=0.9),
         ]
         result = personalise_rankings(scored, ["AI"], ignored_dedupe_keys={"bad"}, tracked_dedupe_keys=set(), briefings={})
         keys = [r["dedupe_key"] for r in result]

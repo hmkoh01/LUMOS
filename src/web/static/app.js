@@ -474,7 +474,7 @@ function renderSavedSignalCard(signal, rank) {
   const url = signal.source_url || sourceItems.find((item) => item.url)?.url || "";
   const keywordOrigin = keywordOriginText(signal);
   return `<article class="signal-card saved-signal-card" data-signal-id="${signal.id}">
-    <div class="signal-head"><div class="rank">${rank}</div><div><h3 class="signal-title">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div>
+    <div class="signal-head"><div class="rank">${rank}</div><div><h3 class="signal-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div>
     <p class="signal-derived-from">${escapeHtml(keywordOrigin)}</p>
     <div class="signal-meta"><span class="pill">출처 ${escapeHtml(signal.source_display || sourceLabel(signal.source_name || "미확인"))}</span><span class="pill">저장한 날짜 ${escapeHtml(formatSavedDate(signal.saved_at || signal.created_at))}</span></div>
     <div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button danger" data-delete-saved>목록에서 빼기</button></div>
@@ -591,7 +591,7 @@ function renderSignalCard(signal, listRank = 1) {
       <div class="signal-head">
         <div class="rank">${listRank}</div>
         <div>
-          <h3 class="signal-title">${escapeHtml(titleKo)}</h3>
+          <h3 class="signal-title" title="${escapeHtml(titleKo)}">${escapeHtml(titleKo)}</h3>
           <div class="signal-meta compact"><span class="pill">${escapeHtml(sourceLabelText)}</span>${contentType ? `<span class="pill">${escapeHtml(contentType)}</span>` : ""}${dateText ? `<span class="pill">${escapeHtml(dateText)}</span>` : ""}</div>
           <p class="signal-summary">${escapeHtml(headlineSummaryKo)}</p>
         </div>
@@ -967,7 +967,7 @@ function renderFeedbackSignalCard(signal, listRank) {
   const url = signal.source_url || "";
   const keywordOrigin = keywordOriginText(signal);
   const source = signal.source_display || sourceLabel(signal.source_name || "미확인");
-  return `<article class="signal-card" data-signal-id="${signal.id}"><div class="signal-head"><div class="rank">${listRank}</div><div><h3 class="signal-title">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div><p class="signal-derived-from">${escapeHtml(keywordOrigin)}</p><div class="signal-meta"><span class="pill">출처 ${escapeHtml(source)}</span><span class="pill">설정한 날짜 ${escapeHtml(formatSavedDate(signal.feedback_at))}</span></div><div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button danger" data-clear-feedback>목록에서 빼기</button></div></article>`;
+  return `<article class="signal-card" data-signal-id="${signal.id}"><div class="signal-head"><div class="rank">${listRank}</div><div><h3 class="signal-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div><p class="signal-derived-from">${escapeHtml(keywordOrigin)}</p><div class="signal-meta"><span class="pill">출처 ${escapeHtml(source)}</span><span class="pill">설정한 날짜 ${escapeHtml(formatSavedDate(signal.feedback_at))}</span></div><div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button danger" data-clear-feedback>목록에서 빼기</button></div></article>`;
 }
 
 async function clearFeedbackSignal(signalId, button) {

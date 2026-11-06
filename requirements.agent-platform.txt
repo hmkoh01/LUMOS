@@ -1,0 +1,4 @@
+# Reproducible Python 3.10+ dependency set for the Agent Platform experiment.
+-r requirements.txt
+google-genai==2.30.1
+pytest==7.4.3

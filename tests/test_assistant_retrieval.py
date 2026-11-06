@@ -99,6 +99,12 @@ class TestPeriodFilter(unittest.TestCase):
         results = svc.retrieve("Weekly AI", user_id=1, period="today")
         self.assertEqual(results, [])
 
+    def test_unrelated_question_does_not_cite_recent_signal(self):
+        _insert_signal(self.store, 1, "AI agent release", days_ago=0.1)
+        svc = SQLiteRetrievalService(self.store)
+        results = svc.retrieve("unrelated astronomy question", user_id=1, period="today")
+        self.assertEqual(results, [])
+
 
 class TestSelectedSignal(unittest.TestCase):
     """selected_signal_id must appear first and be validated by ownership."""

@@ -1843,10 +1843,13 @@ class SQLiteStore:
         item["metadata_json"] = self.loads(item.get("metadata_json"), {})
         briefing = item["metadata_json"]
         if (
+            briefing.get("briefing_provider") != "engine-v2-structured"
+            and (
             briefing.get("briefing_version", 0) < 9
             or not briefing.get("display_title_ko")
             or not briefing.get("display_summary_ko")
             or bool(re.search(r"[A-Za-z]{4,}", str(briefing.get("display_title_ko", ""))))
+            )
         ):
             from src.signals.korean_briefing import build_korean_briefing
             from src.signals.provenance import source_metadata

@@ -230,12 +230,16 @@ def _try_backfill_one(store: SQLiteStore, user_id: int) -> Optional[dict]:
         next_rank = max((int(s.get("rank") or 0) for s in current_signals), default=0) + 1
 
         reserve_rank, candidate = reserves[0]
-        signal = generator._build_signal(
-            candidate,
-            run.get("profile_snapshot_json", {}),
-            run.get("interest_snapshot_json", []),
-            next_rank,
-        )
+        if candidate.get("_engine_signal"):
+            signal = dict(candidate["_engine_signal"])
+            signal["rank"] = next_rank
+        else:
+            signal = generator._build_signal(
+                candidate,
+                run.get("profile_snapshot_json", {}),
+                run.get("interest_snapshot_json", []),
+                next_rank,
+            )
         signal["metadata_json"]["is_additional"] = True
         store.reveal_signals(run_id, [(reserve_rank, signal)], user_id=user_id)
 
