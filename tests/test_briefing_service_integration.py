@@ -92,6 +92,20 @@ def test_fallback_reason_uses_validated_fact_and_topic_boundary():
     assert cards[0]["recommended_action_ko"] == "원문과 릴리스 노트를 확인하세요."
 
 
+def test_production_ranking_never_revives_adjacent_topic_fallback_when_personalization_is_missing():
+    """The legacy fallback was the source of the web's adjacent-topic copy."""
+    imported = experiment_item_to_engine_card(_item())
+    cards = personalise_rankings(
+        [ScoredCandidate(candidate=RawCandidate(
+            dedupe_key="mcp-python-2.3.0", title="MCP Python SDK update", summary="httpx2 requirement",
+        ), importance_score=0.8)],
+        ["AI agent development"], set(), set(),
+        {"mcp-python-2.3.0": imported["briefing"]},
+        require_validated_personalization=True,
+    )
+    assert cards == []
+
+
 def test_period_scores_keep_independent_evaluation_and_safe_backfill():
     candidates = [
         RawCandidate(dedupe_key="direct", title="LangGraph workflow interrupt IDs", summary="strict resume mode", published_at="2026-11-07"),

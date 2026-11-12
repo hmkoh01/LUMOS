@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -27,6 +28,9 @@ class StructuredBriefingCache:
         self.db_path = str(db_path)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=30000")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -43,38 +47,44 @@ class StructuredBriefingCache:
         self._put("engine_personalization_cache", "personalization_json", key, value)
 
     def _get(self, table: str, field: str, key: str) -> Optional[Dict[str, Any]]:
-        row = self._conn.execute(f"SELECT {field} FROM {table} WHERE cache_key = ?", (key,)).fetchone()
+        with self._lock:
+            row = self._conn.execute(f"SELECT {field} FROM {table} WHERE cache_key = ?", (key,)).fetchone()
         return json.loads(row[field]) if row else None
 
     def _put(self, table: str, field: str, key: str, value: Dict[str, Any]) -> None:
-        self._conn.execute(
-            f"INSERT INTO {table} (cache_key, {field}) VALUES (?, ?) "
-            f"ON CONFLICT(cache_key) DO UPDATE SET {field}=excluded.{field}",
-            (key, json.dumps(value, ensure_ascii=False)),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                f"INSERT INTO {table} (cache_key, {field}) VALUES (?, ?) "
+                f"ON CONFLICT(cache_key) DO UPDATE SET {field}=excluded.{field}",
+                (key, json.dumps(value, ensure_ascii=False)),
+            )
+            self._conn.commit()
 
     def purge_older_than(self, days: int) -> Dict[str, int]:
         """Remove stale artifacts without inspecting their content."""
         if days < 1:
             raise ValueError("cache retention must be at least one day")
         result = {}
-        for table in ("engine_content_artifact_cache", "engine_personalization_cache"):
-            cursor = self._conn.execute(
-                f"DELETE FROM {table} WHERE created_at < datetime('now', ?)", (f"-{days} days",)
-            )
-            result[table] = cursor.rowcount
-        self._conn.commit()
+        with self._lock:
+            for table in ("engine_content_artifact_cache", "engine_personalization_cache"):
+                cursor = self._conn.execute(
+                    f"DELETE FROM {table} WHERE created_at < datetime('now', ?)", (f"-{days} days",)
+                )
+                result[table] = cursor.rowcount
+            self._conn.commit()
         return result
 
     def record_metric(self, metric: str, value: float = 1.0) -> None:
         """Store aggregate-only telemetry; never accepts prompts or user data."""
-        self._conn.execute("INSERT INTO engine_metric_events (metric, value) VALUES (?, ?)", (metric, value))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("INSERT INTO engine_metric_events (metric, value) VALUES (?, ?)", (metric, value))
+            self._conn.commit()
 
     def metric_summary(self) -> Dict[str, float]:
-        rows = self._conn.execute("SELECT metric, SUM(value) AS total FROM engine_metric_events GROUP BY metric").fetchall()
+        with self._lock:
+            rows = self._conn.execute("SELECT metric, SUM(value) AS total FROM engine_metric_events GROUP BY metric").fetchall()
         return {row["metric"]: row["total"] for row in rows}
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()

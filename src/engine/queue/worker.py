@@ -24,6 +24,15 @@ JobHandler = Callable[[Dict[str, Any], EngineConfig], Dict[str, Any]]
 _handlers: Dict[str, JobHandler] = {}
 
 
+class JobDeferred(Exception):
+    """A dependency has not finished yet; retry without counting a failure."""
+
+    def __init__(self, delay_seconds: float = 1.0, reason: str = "waiting_for_dependencies") -> None:
+        self.delay_seconds = delay_seconds
+        self.reason = reason
+        super().__init__(reason)
+
+
 def register_handler(job_type: str, handler: JobHandler) -> None:
     _handlers[job_type] = handler
 
@@ -90,6 +99,8 @@ class WorkerPool:
         try:
             result = handler(job.payload_json, self.config)
             self.queue.complete(job.id, result)
+        except JobDeferred as exc:
+            self.queue.defer(job.id, exc.delay_seconds, exc.reason)
         except ExternalCallBlocked as exc:
             self.queue.fail(job.id, f"External call blocked: {exc}")
         except Exception as exc:

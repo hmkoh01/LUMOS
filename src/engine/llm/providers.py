@@ -102,6 +102,9 @@ class AgentPlatformEngineProvider(StructuredBriefingProvider):
         return {
             "id": candidate.dedupe_key, "title": candidate.title, "summary": candidate.summary,
             "source": candidate.source, "url": candidate.url, "published_at": candidate.published_at,
+            "content_type": (candidate.metrics or {}).get("content_kind", ""),
+            "content_kind": (candidate.metrics or {}).get("content_kind", ""),
+            "metrics": dict(candidate.metrics or {}),
         }
 
     def generate_content(self, candidate: Any) -> Dict[str, Any]:

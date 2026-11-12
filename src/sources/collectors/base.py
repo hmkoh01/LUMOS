@@ -32,7 +32,10 @@ class CollectedItem:
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
-        if not data["published_at"]:
+        # Some metadata sources explicitly distinguish an unknown publication
+        # date from a collection timestamp.  Do not silently turn the latter
+        # into false recency for those records.
+        if not data["published_at"] and not data["raw_json"].get("preserve_missing_published_at", False):
             data["published_at"] = data["collected_at"]
         if not data["source_item_id"]:
             data["source_item_id"] = build_source_item_id(data["source"], data["url"], data["title"], data["published_at"])

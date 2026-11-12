@@ -8,6 +8,21 @@ LUMOS는 오늘 봐야 할 신호만 조용히 골라주는 로컬 개인 브리
 python run.py app
 ```
 
+## 분리된 실제 수집·Gemini 로컬 검증
+
+기본 실행은 외부 호출을 하지 않습니다. Railway와 같은 Engine v2 흐름을
+제한된 실제 소스에서 확인하려면 아래의 명시적 명령만 사용합니다.
+
+```powershell
+python run.py local-live
+```
+
+이 모드는 `data/lumos_live_v2.db`, `data/lumos_live_v2_cache.sqlite`,
+`data/lumos_live_v2_queue.sqlite`만 사용하고 기본 DB나 `.env`를 바꾸지
+않습니다. 외부 호출을 명시적으로 허용하며, 처음에는 Hacker News와 GitHub
+두 출처만 수집합니다. 브라우저 주소는 `http://127.0.0.1:8001/app`입니다.
+온보딩에서 관심사를 저장하면 자동 수집·개인화 작업이 큐에 등록됩니다.
+
 브라우저에서 LUMOS Web UI가 열리면:
 
 1. 처음이라면 `시작하기`를 눌러 온보딩을 진행합니다.
@@ -669,3 +684,16 @@ Canary result review 상태:
 - 이후 Cloud Backend가 준비되면 계정, 기기 등록, 구독 상태, entitlement 확인과 연결할 예정입니다.
 
 현재 단계에서는 Web UI를 login-required로 만들지 않습니다. 기존 로컬 MVP 사용 흐름은 그대로 유지됩니다.
+신규 사용자 온보딩을 별도 빈 환경에서 확인할 때는 위치와 포트를 명시해
+기존 `local-live` 상태와 분리할 수 있습니다.
+
+```powershell
+$env:LUMOS_LOCAL_LIVE_DATA_DIR = "$PWD/data/onboarding-new-user"
+$env:LUMOS_LOCAL_LIVE_PORT = "8002"
+python run.py local-live
+```
+
+`local-live`는 Supabase 인증을 유지합니다. Google OAuth를 사용할 배포/로컬
+origin에는 `http://127.0.0.1:<port>/onboarding`을 Supabase의 Redirect URL
+allow-list에 추가해야 합니다. 로그인 뒤에는 서버의 `onboarding_completed`
+상태에 따라 `/onboarding` 또는 `/app`으로 이동합니다.

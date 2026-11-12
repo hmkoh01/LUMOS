@@ -244,6 +244,8 @@ datasets/
 
 # Local-only Gemini experiment fixtures, dry runs, and results
 artifacts/gemini_briefing_experiment/
+# Local QA screenshots, browser profiles, fixtures and databases
+/artifacts/
 
 # Docker
 .dockerignore

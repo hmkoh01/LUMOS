@@ -73,6 +73,10 @@ class GitHubCollector(BaseCollector):
                 "forks": int(repo.get("forks_count") or 0),
                 "language": repo.get("language"),
                 "open_issues": int(repo.get("open_issues_count") or 0),
+                # Repository search verifies discoverability and recent push
+                # activity, not a product release or a material event.
+                "content_kind": "repository_discovery",
+                "activity_timestamp": repo.get("pushed_at"),
             },
             raw_json={
                 "full_name": full_name,

@@ -68,6 +68,37 @@ _GENERIC_RELEASE_TITLE = re.compile(
 
 _DEPLOYMENT_DIRECTIVE = re.compile(r"(?:업데이트|도입|적용|마이그레이션)(?:하세요|하십시오|해보세요)")
 
+_GENERIC_CARD_TITLE = re.compile(
+    r"(?:\uc18c\uac1c|\uae30\ub2a5\s*\uc18c\uac1c|\ud50c\ub7ab\ud3fc\s*\uc18c\uac1c|\ub9ac\ud3ec\uc9c0\ud1a0\ub9ac\s*\uc18c\uac1c|\uad00\ub828\s*\uc815\ubcf4|\ucc38\uace0\ud560\s*\ub9cc\ud55c)", re.I,
+)
+_REPOSITORY_DISCOVERY_TITLE = re.compile(
+    r"(?:\uc800\uc7a5\uc18c\s*\ubc1c\uacac|\ud504\ub85c\uc81d\ud2b8\s*\uc800\uc7a5\uc18c|\ub9ac\ud3ec\uc9c0\ud1a0\ub9ac\s*\ubc1c\uacac)", re.I,
+)
+_NEWS_EVENT_LANGUAGE = re.compile(
+    r"(?:\ucd9c\uc2dc|\uacf5\uac1c|\ubc1c\ud45c|\uc0c8\ub85c\uc6b4\s*\ubc84\uc804|\ub9b4\ub9ac\uc988|\ub7f0\uce6d|\brelease\b|\blaunch\b)", re.I,
+)
+_GENERIC_PERSONALIZATION = re.compile(
+    r"(?:\uc778\uc811\s*\uc8fc\uc81c(?:\s*\uad00\uc810)?|\uc778\uc811\ud55c\s*\ub3c4\uad6c\s*\ubcc0\uacbd|\uc9c1\uc811\uc801\s*\uad00\ub828\uc131\uc774\s*\ub0ae\uc9c0\ub9cc|\ud504\ub85c\uc81d\ud2b8\s*\uc800\uc7a5\uc18c\s*\uad6c\uc870\ub97c?\s*\uac80\ud1a0|\uad00\ub828\s*\uc790\ub8cc(?:\ub97c|\uc744)?\s*(?:\uac80\ud1a0|\ud655\uc778)(?:\ud560|\ud574\ubcfc)\s*\uc218\s*\uc788\uc2b5\ub2c8\ub2e4|\uac80\ud1a0\ud560\s*\ub9cc\ud569\ub2c8\ub2e4|\ucc38\uace0\ud560\s*\ub9cc\ud569\ub2c8\ub2e4)(?:[.!\s]|$)",
+    re.I,
+)
+_EMPTY_RECOMMENDATION_ENDING = re.compile(
+    r"(?:\uc6d0\ubb38(?:\uc744|\uc5d0\uc11c)?(?:\s*\uae30\uc900\uc73c\ub85c)?\s*(?:\ud655\uc778|\uac80\ud1a0)\ud560\s*\uc218\s*\uc788\uc2b5\ub2c8\ub2e4|\ucc38\uace0\ud560\s*\uc218\s*\uc788\uc2b5\ub2c8\ub2e4)\s*[.!]?\s*$",
+    re.I,
+)
+_DECISION_CUE = re.compile(
+    r"(?:\ube44\uad50|\ud310\ub2e8|\uc120\ud0dd|\uc124\uacc4|\uad6c\uc131|\ud655\uc7a5|\ud638\ud658|\uc758\uc874\uc131|\uae30\ub85d|\ucc98\ub9ac|\uc9c1\ubb34|\uc9c0\uc6d0\s*\ub300\uc0c1|\uc811\uc218|\ub9c8\uac10|\uc2e0\uccad|\uc77c\uc815|\uc7a5\uc18c|\uc9c0\uc5ed|\uacf5\uc2dc|\ubcc0\uacbd\s*\ubc94\uc704|\uae30\ub2a5\s*\ubc94\uc704)",
+    re.I,
+)
+
+# These are not forbidden words. They need a nearby plain-language meaning
+# so a reader unfamiliar with developer vocabulary can understand the card.
+_JARGON_EXPLANATIONS = (
+    (re.compile(r"(?:\ub80c\ub354\ub9c1|rendering)", re.I), re.compile(r"(?:\ube44\ub514\uc624|\uc601\uc0c1|\ud654\uba74).{0,12}(?:\ub9cc\ub4e4|\ubcc0\ud658)|(?:\ub9cc\ub4e4|\ubcc0\ud658).{0,12}(?:\ube44\ub514\uc624|\uc601\uc0c1|\ud654\uba74)", re.I), "렌더링의 쉬운 설명 없음"),
+    (re.compile(r"(?:\ud504\ub808\uc784\uc6cc\ud06c|framework)", re.I), re.compile(r"(?:\ub3c4\uad6c\s*(?:\ubaa8\uc74c|\ubb36\uc74c|\ud2c0)|\ub9cc\ub4e4\s*\ub54c\s*\uc4f0\ub294\s*\ub3c4\uad6c)", re.I), "프레임워크의 쉬운 설명 없음"),
+    (re.compile(r"(?:\uad00\uce21\s*\uac00\ub2a5\uc131|observability)", re.I), re.compile(r"(?:\uc2e4\ud589\s*\uc0c1\ud0dc|\uc624\ub958|\ubb38\uc81c\s*\uc6d0\uc778).{0,16}(?:\uc0b4\ud53c|\ucd94\uc801|\ud655\uc778)|(?:\uc0b4\ud53c|\ucd94\uc801|\ud655\uc778).{0,16}(?:\uc2e4\ud589\s*\uc0c1\ud0dc|\uc624\ub958|\ubb38\uc81c\s*\uc6d0\uc778)", re.I), "관측 가능성의 쉬운 설명 없음"),
+    (re.compile(r"(?:\ucee8\ud14d\uc2a4\ud2b8|context)", re.I), re.compile(r"(?:\uc774\uc804\s*\uc791\uc5c5\s*(?:\uae30\ub85d|\uc815\ubcf4)|\uc138\uc158\s*(?:\uae30\ub85d|\uc815\ubcf4))", re.I), "컨텍스트의 쉬운 설명 없음"),
+)
+
 # Common English words that should NOT be treated as named entities.
 _COMMON_WORDS = {
     "The", "This", "That", "What", "Why", "How", "For", "And", "But", "Not",
@@ -119,6 +150,42 @@ def validate_content_briefing(
     if not title:
         issues.append("빈 제목")
 
+    # These phrases communicate neither an event nor a useful decision point.
+    # Reject rather than invent a replacement: deterministic rewriting could
+    # introduce a fact the source did not state.
+    generic_title = bool(_GENERIC_CARD_TITLE.search(title))
+    checks["title_has_reader_value"] = {"pass": not generic_title}
+    if generic_title:
+        issues.append("card title is generic rather than event- or information-led")
+
+    # A GitHub repository search is discovery metadata. It must neither be
+    # presented as a news event nor start the reader-facing title with an
+    # unfamiliar owner/repository identifier. The original title remains in
+    # provenance, so rejecting this output never loses source detail.
+    content_kind = str(source_item.get("content_kind") or (source_item.get("metrics") or {}).get("content_kind") or "")
+    source_title = str(source_item.get("title") or "").strip()
+    title_starts_with_source = bool(source_title and title.casefold().startswith(source_title.casefold()))
+    # GitHub search candidates historically did not all carry content_kind.
+    # An owner/repository-shaped title is still discovery metadata, so apply
+    # the same reader-facing policy without guessing that it is a release.
+    repository_like_source = bool(
+        str(source_item.get("source") or "").casefold() == "github"
+        and re.fullmatch(r"[^/\s]+/[^/\s]+", source_title)
+    )
+    repository_violation = (
+        (content_kind == "repository_discovery" or repository_like_source)
+        and (title_starts_with_source or _GENERIC_CARD_TITLE.search(title) or _REPOSITORY_DISCOVERY_TITLE.search(title) or
+             (briefing.get("is_new_event") is True and _NEWS_EVENT_LANGUAGE.search(title)))
+    )
+    checks["repository_presentation"] = {
+        "pass": not repository_violation,
+        "content_kind": content_kind,
+        "repository_like_source": repository_like_source,
+        "title_starts_with_source": title_starts_with_source,
+    }
+    if repository_violation:
+        issues.append("repository discovery cannot be presented as a generic or new-event news card")
+
     # An internal engineering article can describe a deployed internal system;
     # that is not evidence of a public product release.  "Introduces" remains
     # allowed, while explicit availability wording requires source support.
@@ -140,6 +207,18 @@ def validate_content_briefing(
         warnings.append(f"요약 과장: {len(summary)}자 (목표 <=200)")
     if not summary:
         issues.append("빈 요약")
+
+    reader_text = f"{title} {summary}"
+    unexplained_jargon = [
+        message for term, explanation, message in _JARGON_EXPLANATIONS
+        if term.search(reader_text) and not explanation.search(reader_text)
+    ]
+    checks["reader_language"] = {
+        "pass": not unexplained_jargon,
+        "unexplained": unexplained_jargon,
+    }
+    if unexplained_jargon:
+        issues.append("일반 독자를 위한 전문 용어 설명 부족: " + ", ".join(unexplained_jargon))
 
     # 4. Entity preservation
     entities = _extract_entities(source_text)
@@ -219,6 +298,7 @@ def validate_content_briefing(
 def validate_personalization(
     personalization: Dict[str, Any],
     content_briefing: Dict[str, Any],
+    registered_interests: List[str] | None = None,
 ) -> Dict[str, Any]:
     """Validate personalization output."""
     issues: List[str] = []
@@ -237,9 +317,14 @@ def validate_personalization(
         re.compile(r"관심사 .+와 관련된 자료예요"),
     ]
     is_boilerplate = any(p.search(rec) for p in _BOILERPLATE)
-    checks["not_boilerplate"] = {"pass": not is_boilerplate, "text": rec[:100]}
-    if is_boilerplate:
-        warnings.append("추천 이유가 범용 템플릿과 유사")
+    generic_personalization = bool(_GENERIC_PERSONALIZATION.search(rec))
+    checks["not_boilerplate"] = {
+        "pass": not is_boilerplate and not generic_personalization,
+        "text": rec[:100],
+        "generic_personalization": generic_personalization,
+    }
+    if is_boilerplate or generic_personalization:
+        issues.append("추천 이유가 구체적인 관심사·원문 연결 근거 없이 상투적임")
 
     confidence = personalization.get("relevance_confidence", "")
     checks["has_confidence"] = {"pass": confidence in ("high", "medium", "low"), "value": confidence}
@@ -290,6 +375,43 @@ def validate_personalization(
     checks["source_detail_anchor"] = {"pass": detail_anchor_present, "anchors": anchors[:6]}
     if not detail_anchor_present:
         issues.append("추천 이유에 원문 변경을 식별할 구체적 근거가 없음")
+
+    # A caller with registered interests can reject a generic sentence that
+    # merely repeats the card. Historical callers omit this optional argument
+    # and therefore retain their original validation behaviour.
+    if registered_interests is not None:
+        profile_text = " ".join((
+            str(personalization.get("user_relevance_ko", "")), rec,
+        )).casefold()
+        interest_terms = []
+        for interest in registered_interests:
+            normalized = " ".join(str(interest or "").casefold().split())
+            if not normalized:
+                continue
+            interest_terms.append(normalized)
+            interest_terms.extend(
+                part for part in re.split(r"[\s/,-]+", normalized)
+                if (part.isascii() and len(part) >= 3) or (not part.isascii() and len(part) >= 2)
+            )
+        interest_terms = list(dict.fromkeys(interest_terms))
+        matched_interest_terms = [term for term in interest_terms if term in profile_text]
+        interest_specific = bool(matched_interest_terms)
+        checks["interest_specificity"] = {
+            "pass": interest_specific,
+            "matched_terms": matched_interest_terms[:4],
+        }
+        if not interest_specific:
+            issues.append("recommendation reason has no registered-interest-specific connection")
+
+        empty_ending = bool(_EMPTY_RECOMMENDATION_ENDING.search(rec))
+        decision_cue = bool(_DECISION_CUE.search(rec))
+        checks["recommendation_usefulness"] = {
+            "pass": not empty_ending and decision_cue,
+            "empty_ending": empty_ending,
+            "decision_cue": decision_cue,
+        }
+        if empty_ending or not decision_cue:
+            issues.append("추천 이유가 사용자가 살필 구체적인 판단·비교 지점을 설명하지 않음")
 
     return {"valid": len(issues) == 0, "issues": issues, "warnings": warnings, "checks": checks}
 

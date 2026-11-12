@@ -12,14 +12,14 @@
         const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
         const query = new URLSearchParams(window.location.search);
         if (hash.has("access_token") || hash.has("code") || query.has("code")) {
-          window.location.replace("/" + window.location.search + window.location.hash);
+          window.location.replace("/onboarding" + window.location.search + window.location.hash);
         }
       })();
     </script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=20261016-source-redesign" />
+    <link rel="stylesheet" href="/static/styles.css?v=20261112-feedback-v2" />
   </head>
-  <body>
+  <body class="app-pending">
     <div class="app-shell">
       <aside class="sidebar">
         <a class="brand" href="/" aria-label="LUMOS 메인 페이지로 이동">
@@ -29,9 +29,7 @@
             <button class="nav-item active" data-tab="signals">브리핑</button>
             <button class="nav-item" data-tab="saved">저장한 소식</button>
             <button class="nav-item" data-tab="interests">내 관심사</button>
-          <button class="nav-item" data-tab="recommendations">추천 관리</button>
-          <button class="nav-item" data-tab="sources">소스</button>
-          <button class="nav-item" data-tab="settings">설정</button>
+          <button class="nav-item" data-tab="customize">맞춤 설정</button>
         </nav>
         <button class="beta-feedback-btn" type="button" id="open-beta-feedback">피드백 보내기</button>
         <!-- User menu — shown only in Supabase auth mode -->
@@ -43,15 +41,13 @@
 
       <main class="content">
         <section class="view active" id="view-signals" aria-labelledby="signals-title">
-          <div class="hero">
+          <header class="section-header briefing-header">
             <div>
-              <p class="eyebrow">PERSONAL BRIEFING</p>
-              <h2 id="signals-title">중요한 변화만, 한눈에</h2>
-              <p class="briefing-intro">선택한 관심사와 소스를 바탕으로 정리한 브리핑입니다.</p>
+              <h2 id="signals-title">오늘의 브리핑</h2>
+              <p class="briefing-intro">내 관심사에 맞는 소식을 모았어요.</p>
             </div>
-            <div class="hero-actions" id="hero-actions">
-            </div>
-          </div>
+            <button class="button secondary" id="refresh-signals" type="button">새로고침</button>
+          </header>
           <div class="briefing-toolbar">
             <div class="period-tabs" role="tablist" aria-label="브리핑 기간">
               <button class="period-tab active" type="button" role="tab" aria-selected="true" data-period="today">오늘</button>
@@ -59,7 +55,6 @@
               <button class="period-tab" type="button" role="tab" aria-selected="false" data-period="month">이번 달</button>
             </div>
           </div>
-          <div id="first-run-panel"></div>
           <div class="generate-banner hidden" id="generate-banner" role="status" aria-live="polite">
             <span class="spinner"></span> 브리핑을 준비하고 있어요…
           </div>
@@ -69,43 +64,24 @@
         <section class="view" id="view-saved" aria-labelledby="saved-title">
           <div class="section-header">
             <div>
-              <p class="eyebrow">READ LATER</p>
               <h2 id="saved-title">저장한 소식</h2>
-              <p>나중에 다시 보고 싶은 소식을 모아두는 공간이에요.</p>
+              <p>나중에 다시 보고 싶은 소식을 모아뒀어요.</p>
             </div>
             <button class="button secondary" id="refresh-saved-signals" type="button">새로고침</button>
           </div>
           <div id="saved-signals-list" class="stack"></div>
         </section>
 
-        <section class="view" id="view-recommendations" aria-labelledby="recommendations-title">
-          <div class="section-header">
-            <div>
-              <p class="eyebrow">RECOMMENDATIONS</p>
-              <h2 id="recommendations-title">추천 관리</h2>
-              <p>어떤 소식을 더 보고 싶은지, 덜 보고 싶은지 언제든 조절할 수 있어요.</p>
-            </div>
-            <button class="button secondary" id="refresh-recommendations" type="button">새로고침</button>
-          </div>
-          <div class="recommendation-tabs" role="tablist" aria-label="추천 관리 분류">
-            <button class="recommendation-tab active" type="button" role="tab" aria-selected="true" data-recommendation-category="tracked">더 보고 싶은 소식</button>
-            <button class="recommendation-tab" type="button" role="tab" aria-selected="false" data-recommendation-category="ignored">덜 보고 싶은 소식</button>
-          </div>
-          <div class="recommendation-panel">
-            <p id="recommendation-category-description">비슷한 소식의 추천을 늘리는 데 참고해요.</p>
-            <div id="recommendation-signals-list" class="stack"></div>
-          </div>
-        </section>
+
 
         <section class="view" id="view-interests" aria-labelledby="interests-title">
           <div class="section-header">
             <div>
-              <p class="eyebrow">개인화 기준</p>
               <h2 id="interests-title">내 관심사</h2>
-              <p>LUMOS가 소식을 고를 때 참고하는 기준이에요.</p>
+              <p>관심사를 바탕으로 필요한 소식을 골라드려요.</p>
             </div>
             <div class="actions">
-              <button class="button primary" id="add-interest" type="button" aria-expanded="false" aria-controls="add-interest-form">키워드 추가</button>
+              <button class="button primary" id="add-interest" type="button" aria-expanded="false" aria-controls="add-interest-form">관심사 추가</button>
             </div>
           </div>
           <form id="add-interest-form" class="card hidden">
@@ -119,24 +95,14 @@
               <button class="button secondary" id="cancel-add-interest" type="button">취소</button>
             </div>
           </form>
-          <div id="interests-list" class="grid"></div>
+          <div id="interests-list"></div>
         </section>
 
-        <section class="view" id="view-sources" aria-labelledby="sources-title">
-          <div class="section-header">
-            <div>
-              <p class="eyebrow">SOURCES</p>
-              <h2 id="sources-title">소스</h2>
-              <p>브리핑에 사용할 정보 출처를 설정하세요.</p>
-            </div>
-          </div>
-          <div id="sources-list" class="grid"></div>
-        </section>
+
 
         <section class="view" id="view-activity" aria-labelledby="activity-title">
           <div class="section-header">
             <div>
-              <p class="eyebrow">조용한 자동화</p>
               <h2 id="activity-title">활동</h2>
               <p>LUMOS가 오늘 어떤 일을 했는지 확인할 수 있어요.</p>
             </div>
@@ -145,15 +111,14 @@
           <div id="activity-list" class="stack"></div>
         </section>
 
-        <section class="view" id="view-settings" aria-labelledby="settings-title">
-          <div class="section-header">
-            <div>
-              <p class="eyebrow">나에게 맞추기</p>
-              <h2 id="settings-title">설정</h2>
-              <p>매일 어떤 방식으로 소식을 받을지 정해요.</p>
-            </div>
-          </div>
 
+        <section class="view" id="view-customize" aria-labelledby="customize-title">
+          <header class="section-header"><div><h2 id="customize-title">맞춤 설정</h2><p>소식과 평가 설정을 한곳에서 관리해요.</p></div></header>
+          <div class="customize-tabs" role="tablist" aria-label="맞춤 설정">
+            <button type="button" class="customize-tab active" role="tab" data-custom-tab="news" aria-selected="true" aria-controls="customize-news">소식 설정</button>
+            <button type="button" class="customize-tab" role="tab" data-custom-tab="feedback" aria-selected="false" aria-controls="customize-feedback">평가 관리</button>
+          </div>
+          <div id="customize-news" role="tabpanel">
           <form id="settings-form" class="settings-grid settings-simple">
             <div class="card account-shell" id="account-shell">
               <div class="card-title">
@@ -217,110 +182,28 @@
               </div>
             </div>
 
-            <div class="card">
-              <div class="card-title"><h3>브리핑</h3></div>
-              <label class="form-group">
-                <span>브리핑에 표시할 소식 개수</span>
+            <div class="card settings-briefing-card">
+              <label class="settings-count-row" for="setting-signal-count">
+                <span>표시할 소식 수</span>
                 <select id="setting-signal-count">
-                  <option value="1">1개</option>
-                  <option value="3">3개</option>
-                  <option value="5">5개</option>
-                  <option value="7" id="signal-count-option-7">7개</option>
+                  <option value="">설정을 확인하고 있어요</option>
                 </select>
-                <small id="signal-count-gate-note" class="soft-warning"></small>
               </label>
-              <p class="settings-info">소식은 관심사와 소스 설정을 바탕으로 자동으로 수집됩니다. 수집 주기와 방식은 서비스가 자동으로 결정합니다.</p>
-              <button class="button primary full" type="submit">설정 저장</button>
+              <small id="signal-count-gate-note" class="soft-warning"></small>
+              <p id="signal-count-save-status" class="settings-save-status" role="status" aria-live="polite"></p>
             </div>
           </form>
+          <div id="sources-list" class="grid"></div>
+          </div>
+          <div id="customize-feedback" role="tabpanel" hidden>
+          <div class="recommendation-panel">
+            <div class="feedback-list-heading"><h3>내가 평가한 소식</h3><span id="feedback-count" aria-live="polite"></span></div>
+            <div id="recommendation-signals-list" class="stack"></div>
+          </div>
+          <section id="feedback-learning-management" class="feedback-learning-management" aria-labelledby="feedback-learning-management-title"></section>
+          </div>
         </section>
       </main>
-    </div>
-
-    <div class="onboarding-modal hidden" id="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
-      <div class="onboarding-card">
-        <div class="onboarding-head">
-          <div>
-            <p class="eyebrow">처음 설정</p>
-            <h2 id="onboarding-title">30초만 설정하면 바로 시작할 수 있어요</h2>
-          </div>
-          <button class="button ghost" type="button" id="close-onboarding">닫기</button>
-        </div>
-
-        <div class="stepper" aria-label="온보딩 단계">
-          <span class="step-dot active" data-step-dot="1">1</span>
-          <span class="step-dot" data-step-dot="2">2</span>
-          <span class="step-dot" data-step-dot="3">3</span>
-        </div>
-
-        <form id="onboarding-form">
-          <section class="onboarding-step active" data-step="1">
-            <h3>어떤 일을 하고 있나요?</h3>
-            <p>LUMOS가 소식을 고를 기준을 알려주세요.</p>
-            <div class="choice-grid" id="role-options">
-              <button type="button" class="choice selected" data-role="예비 창업자 / PM">예비 창업자 / PM</button>
-              <button type="button" class="choice" data-role="취업 준비생">취업 준비생</button>
-              <button type="button" class="choice" data-role="콘텐츠 기획자">콘텐츠 기획자</button>
-              <button type="button" class="choice" data-role="연구자 / 대학원생">연구자 / 대학원생</button>
-              <button type="button" class="choice" data-role="개발자">개발자</button>
-            </div>
-            <label class="form-group">
-              <span>직접 입력</span>
-              <input id="onboarding-role-custom" placeholder="예: B2B SaaS 창업 준비 중" />
-            </label>
-          </section>
-
-          <section class="onboarding-step" data-step="2">
-            <h3>요즘 보고 싶은 주제</h3>
-            <p>최소 1개만 있어도 시작할 수 있어요. 3개 이상이면 더 정확해져요.</p>
-            <label class="form-group">
-              <span>관심 키워드 입력</span>
-              <input id="keyword-input" placeholder="AI agent, 생산성 툴, 스타트업" />
-            </label>
-            <div class="suggestion-row">
-              <button type="button" data-suggestion="AI agent">AI agent</button>
-              <button type="button" data-suggestion="생산성 툴">생산성 툴</button>
-              <button type="button" data-suggestion="스타트업">스타트업</button>
-              <button type="button" data-suggestion="모빌리티 UX">모빌리티 UX</button>
-              <button type="button" data-suggestion="GitHub 트렌드">GitHub 트렌드</button>
-              <button type="button" data-suggestion="공식 블로그 업데이트">공식 블로그 업데이트</button>
-            </div>
-            <div class="tag-row" id="keyword-tags"></div>
-          </section>
-
-          <section class="onboarding-step" data-step="3">
-            <h3>어떻게 받을까요?</h3>
-            <p>개인 맥락은 사용자가 켠 경우에만 사용해요. 원문 전체가 아니라 소식을 고르기 위한 일부 요약과 키워드 중심으로 참고합니다.</p>
-            <label class="form-group">
-              <span>받을 소식 개수</span>
-              <select id="onboarding-signal-count">
-                <option value="1">1개</option>
-                <option value="3" selected>3개</option>
-                <option value="5">5개</option>
-              </select>
-            </label>
-            <p class="settings-info">소식은 관심사를 기반으로 자동 수집되며, 매일 아침 새로운 브리핑이 준비됩니다.</p>
-            <label class="toggle-row">
-              <span>브라우저 기록 사용</span>
-              <input id="onboarding-browser" type="checkbox" />
-            </label>
-            <label class="toggle-row">
-              <span>로컬 폴더 사용</span>
-              <input id="onboarding-local" type="checkbox" />
-            </label>
-            <label class="form-group">
-              <span>로컬 폴더 경로</span>
-              <textarea id="onboarding-local-folders" rows="2" placeholder="한 줄에 하나씩 입력하세요."></textarea>
-            </label>
-          </section>
-
-          <div class="onboarding-actions">
-            <button class="button secondary" type="button" id="onboarding-prev">이전</button>
-            <button class="button primary" type="button" id="onboarding-next">다음</button>
-            <button class="button primary hidden" type="submit" id="onboarding-submit">오늘의 소식 받기</button>
-          </div>
-        </form>
-      </div>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -394,6 +277,6 @@
     <!-- Supabase JS SDK (loaded unconditionally; auth.js skips init in local mode) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="/static/auth.js"></script>
-    <script src="/static/app.js?v=20261016-source-redesign"></script>
+    <script src="/static/app.js?v=20261112-feedback-v1"></script>
   </body>
 </html>

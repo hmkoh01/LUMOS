@@ -1,25 +1,28 @@
 const state = {
   profile: null,
   settings: null,
+  feedbackLearning: null,
   connectors: [],
   sources: [],
   interests: [],
+  interestDrafts: {},
   interestRecommendations: [],
   feedbackSignals: [],
+  feedbackLoadVersion: 0,
+  feedbackPossiblyTruncated: false,
   feedbackMode: null,
   recommendationCategory: "tracked",
   signals: [],
   savedSignals: [],
   hasMoreSignals: false,
   signalRunId: null,
+  signalLoadVersion: 0,
   loadingMoreSignals: false,
   activeTab: "signals",
+  customizeTab: "news",
   briefingPeriod: "today",
   briefingDateKey: "",
   refreshingForDateChange: false,
-  onboardingStep: 1,
-  onboardingRole: "예비 창업자 / PM",
-  onboardingKeywords: [],
   firstRun: false,
   authUser: null,
   authShell: {
@@ -32,6 +35,11 @@ const state = {
   featureGates: null,
   engineV2: false,
   lastDismiss: null,
+  briefingOperationState: "",
+  briefingPeriodSnapshot: "",
+  briefingDisplayMax: null,
+  firstBriefingState: "",
+  displayLimit: 5,
 };
 
 const sourceCopy = {
@@ -55,22 +63,22 @@ const hashToTab = {
   "#today": "signals",
   "#signals": "signals",
   "#saved": "saved",
-  "#tracked": "recommendations",
-  "#ignored": "recommendations",
-  "#recommendations": "recommendations",
+  "#tracked": "customize",
+  "#ignored": "customize",
+  "#recommendations": "customize",
   "#interests": "interests",
-  "#sources": "sources",
+  "#sources": "customize",
   "#activity": "activity",
-  "#settings": "settings",
+  "#settings": "customize",
+  "#customize": "customize",
+  "#customize-feedback": "customize",
 };
 const tabToHash = {
   signals: "#today",
   saved: "#saved",
-  recommendations: "#recommendations",
   interests: "#interests",
-  sources: "#sources",
   activity: "#activity",
-  settings: "#settings",
+  customize: "#customize",
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -85,12 +93,21 @@ async function initApp() {
   const proceed = await initAuth();
   if (!proceed) return;
 
+  // Do this before binding or fetching any briefing data.  The status is
+  // resolved by the authenticated server-side user mapping, not local state.
+  const onboarding = await api("/api/v1/onboarding/status");
+  if (!onboarding.completed) {
+    window.location.replace("/onboarding");
+    return;
+  }
+  document.body.classList.remove("app-pending");
+
   initAuthShell();
   bindNavigation();
   bindTopActions();
   bindBriefingPeriods();
+  bindBriefingAssistantCollision();
   bindSourceChat();
-  bindOnboarding();
   bindBetaFeedback();
   applyHashTab({ load: false });
   window.addEventListener("hashchange", applyHashTab);
@@ -98,9 +115,7 @@ async function initApp() {
 
   await loadInitialData();
   startBriefingDayWatcher();
-
-  // Auto-open onboarding for first-time auth users.
-  if (authClient.isAuthMode() && state.firstRun) openOnboarding();
+  startBriefingStatusPolling();
 
   if (state.activeTab !== "signals") await loadTab(state.activeTab);
   restoreScrollPosition(initialScrollPosition);
@@ -121,8 +136,15 @@ function tabFromHash(hash = location.hash) {
 function applyHashTab(options = {}) {
   const knownHash = Boolean(hashToTab[location.hash]);
   const tab = tabFromHash(location.hash);
+  const previousCategory = state.recommendationCategory;
+  const previousCustomizeTab = state.customizeTab;
   if (location.hash === "#tracked") state.recommendationCategory = "tracked";
   if (location.hash === "#ignored") state.recommendationCategory = "ignored";
+  if (tab === "customize") {
+    const feedback = ["#tracked", "#ignored", "#recommendations", "#customize-feedback"].includes(location.hash);
+    selectCustomizeTab(feedback ? "feedback" : "news", { load: options.load !== false && state.activeTab === "customize" });
+    if (feedback && previousCustomizeTab === "feedback" && state.activeTab === "customize" && options.load !== false && previousCategory !== state.recommendationCategory) loadRecommendationSignals();
+  }
   if (location.hash && !knownHash) {
     history.replaceState(null, "", tabToHash.signals);
   }
@@ -130,9 +152,13 @@ function applyHashTab(options = {}) {
 }
 
 function setActiveTab(tab, options = {}) {
+  if (["recommendations", "sources", "settings"].includes(tab)) {
+    selectCustomizeTab(tab === "recommendations" ? "feedback" : "news", { load: options.load && state.activeTab === "customize" });
+    tab = "customize";
+  }
   const nextTab = tabToHash[tab] ? tab : "signals";
   const changed = state.activeTab !== nextTab;
-  const nextHash = tabToHash[nextTab] || tabToHash.signals;
+  const nextHash = nextTab === "customize" && state.customizeTab === "feedback" ? "#customize-feedback" : (tabToHash[nextTab] || tabToHash.signals);
   if (options.updateHash && location.hash !== nextHash) {
     history.replaceState(null, "", nextHash);
   }
@@ -145,12 +171,27 @@ function setActiveTab(tab, options = {}) {
   if (options.load && changed) loadTab(tab);
 }
 
-function bindTopActions() {
-  document.getElementById("refresh-saved-signals").addEventListener("click", loadSavedSignals);
-  document.getElementById("refresh-recommendations").addEventListener("click", loadRecommendationSignals);
-  document.querySelectorAll("[data-recommendation-category]").forEach((button) => {
-    button.addEventListener("click", () => selectRecommendationCategory(button.dataset.recommendationCategory));
+function selectCustomizeTab(tab, options = {}) {
+  const next = tab === "feedback" ? "feedback" : "news";
+  const changed = state.customizeTab !== next;
+  state.customizeTab = next;
+  document.querySelectorAll("[data-custom-tab]").forEach((button) => {
+    const selected = button.dataset.customTab === next;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
   });
+  const news = document.getElementById("customize-news");
+  const feedback = document.getElementById("customize-feedback");
+  if (news) news.hidden = next !== "news";
+  if (feedback) feedback.hidden = next !== "feedback";
+  if (options.updateHash) history.replaceState(null, "", next === "feedback" ? "#customize-feedback" : "#customize");
+  if (options.load && changed) loadCustomizeTab();
+}
+
+function bindTopActions() {
+  document.querySelectorAll("[data-custom-tab]").forEach((button) => button.addEventListener("click", () => selectCustomizeTab(button.dataset.customTab, { updateHash: true, load: true })));
+  document.getElementById("refresh-saved-signals").addEventListener("click", loadSavedSignals);
+  document.getElementById("refresh-signals").addEventListener("click", refreshBriefing);
   document.getElementById("refresh-activity").addEventListener("click", loadActivity);
   document.getElementById("settings-form").addEventListener("submit", saveSettings);
   document.getElementById("add-interest").addEventListener("click", openInterestForm);
@@ -159,7 +200,7 @@ function bindTopActions() {
   document.querySelectorAll("[data-account-action]").forEach((button) => {
     button.addEventListener("click", () => handleAccountAction(button.dataset.accountAction));
   });
-  document.getElementById("setting-signal-count")?.addEventListener("change", renderSignalCountGateNote);
+  document.getElementById("setting-signal-count")?.addEventListener("change", saveSettings);
 }
 
 // Keep period selection at the presentation boundary: card rendering and
@@ -173,6 +214,7 @@ function bindBriefingPeriods() {
         item.classList.toggle("active", selected);
         item.setAttribute("aria-selected", String(selected));
       });
+      updateBriefingHeader();
       loadSignals();
       // Reset conversation so the next Assistant message uses the new period's signals.
       assistantState.conversationId = null;
@@ -180,6 +222,41 @@ function bindBriefingPeriods() {
       updateChatPeriodLabel();
     });
   });
+}
+
+// Keep the floating launcher clear of briefing content while scrolling.
+// Restore it as soon as the card or empty state is clear.
+function bindBriefingAssistantCollision() {
+  const launcher = document.getElementById("chat-launcher");
+  if (!launcher) return;
+  let queued = false;
+  const update = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      const active = document.getElementById("view-signals")?.classList.contains("active");
+      const a = launcher.getBoundingClientRect();
+      const overlaps = active && [...document.querySelectorAll("#signals-list .signal-card, #signals-list .empty-state")].some((card) => {
+        const b = card.getBoundingClientRect();
+        return b.width && b.height && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+      });
+      if (launcher.classList.contains("briefing-control-overlap") !== Boolean(overlaps)) {
+        launcher.classList.toggle("briefing-control-overlap", Boolean(overlaps));
+      }
+    });
+  };
+  window.addEventListener("scroll", update, { passive: true });
+  window.addEventListener("resize", update);
+  const observer = new MutationObserver(update);
+  observer.observe(document.getElementById("signals-list"), { childList: true, subtree: true });
+  observer.observe(document.getElementById("view-signals"), { attributes: true, attributeFilter: ["class"] });
+  update();
+}
+
+function updateBriefingHeader() {
+  const labels = { today: "오늘의 브리핑", week: "이번 주 브리핑", month: "이번 달 브리핑" };
+  document.getElementById("signals-title").textContent = labels[state.briefingPeriod] || labels.today;
 }
 
 // The server groups briefing periods by the Korean calendar.  Keep an open
@@ -239,30 +316,6 @@ async function checkBriefingDayChange() {
   }
 }
 
-function bindOnboarding() {
-  document.getElementById("close-onboarding").addEventListener("click", closeOnboarding);
-  document.getElementById("onboarding-prev").addEventListener("click", () => setOnboardingStep(state.onboardingStep - 1));
-  document.getElementById("onboarding-next").addEventListener("click", () => setOnboardingStep(state.onboardingStep + 1));
-  document.getElementById("onboarding-form").addEventListener("submit", completeOnboarding);
-  document.querySelectorAll("[data-role]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.onboardingRole = button.dataset.role;
-      document.querySelectorAll("[data-role]").forEach((item) => item.classList.toggle("selected", item === button));
-    });
-  });
-  document.querySelectorAll("[data-suggestion]").forEach((button) => {
-    button.addEventListener("click", () => addKeyword(button.dataset.suggestion));
-  });
-  const input = document.getElementById("keyword-input");
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === ",") {
-      event.preventDefault();
-      addKeyword(input.value);
-      input.value = "";
-    }
-  });
-}
-
 async function loadInitialData() {
   showLoading("signals-list", "오늘의 소식을 확인하고 있어요.");
   await Promise.allSettled([loadProfile(), loadSettings(), loadConnectors(), loadSources(), loadInterests(false), loadSignals(false), loadEngineStatus()]);
@@ -276,8 +329,36 @@ async function loadEngineStatus() {
   try {
     const data = await api("/api/v1/engine/status");
     state.engineV2 = Boolean(data.enabled);
+    const max = Number(data.max_briefing_display);
+    state.briefingDisplayMax = Number.isInteger(max) && max > 0 ? max : null;
   } catch (_) {
     state.engineV2 = false;
+    state.briefingDisplayMax = null;
+  }
+  renderSettings();
+}
+
+function startBriefingStatusPolling() {
+  refreshBriefingOperationStatus();
+  window.setInterval(refreshBriefingOperationStatus, 15000);
+}
+
+async function refreshBriefingOperationStatus() {
+  if (!state.engineV2) return;
+  try {
+    const data = await api("/api/v1/engine/operations/status");
+    const previous = state.briefingOperationState;
+    const previousPeriods = state.briefingPeriodSnapshot;
+    state.briefingOperationState = data.state || "ready";
+    state.briefingPeriodSnapshot = JSON.stringify(data.periods || {});
+    // Operational diagnostics remain available through the status endpoint;
+    // the briefing itself presents a single content state.
+    document.getElementById("generate-banner")?.classList.add("hidden");
+    const finished = ["working", "collecting", "generating"].includes(previous) && ["ready", "insufficient"].includes(data.state);
+    const cardsChanged = previousPeriods && previousPeriods !== state.briefingPeriodSnapshot;
+    if (finished || cardsChanged) await loadSignals();
+  } catch (_) {
+    // The read-only status endpoint is optional during a rolling deployment.
   }
 }
 
@@ -296,6 +377,13 @@ async function loadTab(tab) {
     await Promise.allSettled(settingsPromises);
     renderSettings();
   }
+  if (tab === "customize") await loadCustomizeTab();
+}
+
+async function loadCustomizeTab() {
+  if (state.customizeTab === "feedback") return loadRecommendationSignals();
+  await Promise.allSettled([loadSettings()]);
+  await loadSources();
 }
 
 /**
@@ -338,6 +426,27 @@ async function apiFetch(path, options = {}) {
 // Mutable for the isolated UI test harness; production code always keeps the
 // default apiFetch implementation.
 let api = apiFetch;
+
+// Optional post-deployment features must not make an older-but-otherwise
+// usable local server fail its core screens. The local OpenAPI document
+// contains no user data and avoids writes to routes the running backend lacks.
+const optionalApiSupport = new Map();
+
+async function supportsOptionalApi(path, method = "get") {
+  const key = `${method.toLowerCase()}:${path}`;
+  if (optionalApiSupport.has(key)) return optionalApiSupport.get(key);
+  try {
+    const response = await fetch("/openapi.json", { cache: "no-store" });
+    if (!response.ok) return null;
+    const spec = await response.json();
+    const supported = Boolean(spec?.paths?.[path]?.[method.toLowerCase()]);
+    optionalApiSupport.set(key, supported);
+    return supported;
+  } catch (_) {
+    // Preserve normal API behavior if capability discovery itself is absent.
+    return null;
+  }
+}
 
 async function loadProfile() {
   const data = await api("/api/v1/profile");
@@ -386,17 +495,34 @@ async function loadFeatureGates() {
   renderGateSummary();
 }
 
-async function loadSignals(render = true, scrollPosition = render ? captureScrollPosition() : null) {
+async function loadSignals(render = true, scrollPosition = render ? captureScrollPosition() : null, options = {}) {
   const container = document.getElementById("signals-list");
-  if (render) showLoading("signals-list", "브리핑을 불러오고 있어요.");
+  if (render && !options.preserve) showLoading("signals-list", "브리핑을 불러오고 있어요.");
+  const period = state.briefingPeriod || "today";
+  const loadVersion = ++state.signalLoadVersion;
   try {
-    const period = state.briefingPeriod || "today";
     const data = await api(`/api/v1/signals?period=${encodeURIComponent(period)}`);
-    state.signals = (data.signals || []).filter((signal) => signal.status !== "archived");
+    // Polling and a period-tab change can overlap.  Never let a slower old
+    // response replace the newer period's cards.
+    if (loadVersion !== state.signalLoadVersion || state.briefingPeriod !== period) return;
+    state.displayLimit = Math.max(1, Number(data.display_limit || state.displayLimit || 5));
+    // The server is authoritative; retain this client cap to prevent stale
+    // responses or a period switch from ever rendering reserve cards.
+    state.signals = (data.signals || [])
+      .filter((signal) => signal.status !== "archived")
+      .slice(0, state.displayLimit);
     state.hasMoreSignals = Boolean(data.has_more);
     state.signalRunId = data.pipeline_run_id;
+    state.firstBriefingState = data.first_briefing_state || "";
+    state.signalLoadError = false;
     if (render) renderSignals();
   } catch (error) {
+    if (loadVersion !== state.signalLoadVersion || state.briefingPeriod !== period) return;
+    if (options.preserve) {
+      showToast("브리핑을 새로 불러오지 못했어요. 다시 시도해 주세요.");
+      return;
+    }
+    state.signalLoadError = true;
     if (render) {
       container.innerHTML = emptyState("잠시 연결이 불안정해요.", "다시 시도해보세요.", "새로고침", "retry-signals");
       bindEmptyAction("retry-signals", loadSignals);
@@ -406,36 +532,41 @@ async function loadSignals(render = true, scrollPosition = render ? captureScrol
   }
 }
 
+async function refreshBriefing() {
+  const button = document.getElementById("refresh-signals");
+  if (!button || button.disabled) return;
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = "불러오는 중…";
+  try {
+    await loadSignals(true, captureScrollPosition(), { preserve: true });
+  } finally {
+    button.innerHTML = original;
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
+}
+
 function renderSignals() {
   const container = document.getElementById("signals-list");
+  if (state.signalLoadError) {
+    container.innerHTML = emptyState("브리핑을 불러오지 못했어요.", "잠시 후 다시 시도해 주세요.", "다시 시도", "retry-signals");
+    bindEmptyAction("retry-signals", loadSignals);
+    return;
+  }
   if (!state.signals.length) {
-    const labels = { today: "오늘", week: "이번 주", month: "이번 달" };
-    const periodLabel = labels[state.briefingPeriod] || labels.today;
+    const pending = state.firstBriefingState === "collection_pending";
     container.innerHTML = emptyState(
-      `${periodLabel} 브리핑은 아직 없어요.`,
-      state.briefingPeriod === "today"
-        ? "관심사와 소스 설정을 바탕으로 소식이 자동 수집됩니다. 잠시 후 다시 확인해보세요."
-        : "이 기간에 해당하는 소식이 쌓이면 여기에서 확인할 수 있어요.",
-      state.briefingPeriod === "today" ? "관심사 확인하기" : "오늘 브리핑 보기",
-      state.briefingPeriod === "today" ? "open-interests" : "open-today"
+      pending ? "첫 브리핑을 준비하고 있어요." : "이번 기간에는 새로운 소식이 없어요.",
+      pending ? "브리핑이 준비되면 이곳에서 확인할 수 있어요." : "관심사에 맞는 소식이 생기면 이곳에서 확인할 수 있어요.",
+      "내 관심사 보기", "open-interests"
     );
     bindEmptyAction("open-interests", () => switchTab("interests"));
-    bindEmptyAction("open-today", () => document.querySelector('[data-period="today"]')?.click());
     return;
   }
   container.innerHTML = state.signals.map((signal, index) => renderSignalCard(signal, index + 1)).join("");
   bindSignalActions(container);
-}
-
-function selectRecommendationCategory(category) {
-  if (!["tracked", "ignored"].includes(category)) return;
-  state.recommendationCategory = category;
-  document.querySelectorAll("[data-recommendation-category]").forEach((button) => {
-    const selected = button.dataset.recommendationCategory === category;
-    button.classList.toggle("active", selected);
-    button.setAttribute("aria-selected", String(selected));
-  });
-  loadRecommendationSignals();
 }
 
 async function loadSavedSignals(render = true, scrollPosition = render ? captureScrollPosition() : null) {
@@ -521,30 +652,15 @@ function detectFirstRun() {
 }
 
 function renderFirstRunPanel() {
-  const panel = document.getElementById("first-run-panel");
-  if (!state.firstRun) {
-    panel.innerHTML = "";
-    return;
-  }
-  panel.innerHTML = `
-    <div class="first-run-card">
-      <div>
-        <p class="eyebrow">첫 브리핑 준비</p>
-        <h3>아직 LUMOS가 당신의 관심사를 몰라요.</h3>
-        <p>30초만 설정하면 오늘 볼 소식을 한국어로 정리해드릴게요.</p>
-      </div>
-      <button class="button primary" data-open-onboarding>시작하기</button>
-    </div>
-  `;
-  panel.querySelector("[data-open-onboarding]").addEventListener("click", openOnboarding);
+  // First-run setup has its own route. Direct /app access redirects before
+  // this legacy renderer can expose any setup UI.
 }
 
 async function generateSignals(triggerButton) {
-  // Legacy: manual generation removed in v2 engine.
-  // On first onboarding, still trigger initial pipeline for backward compatibility.
+  // Legacy v1 path retained only for older compatibility clients.  The
+  // current UI never calls this; Engine v2 schedules work independently.
   const button = triggerButton || document.getElementById("generate-signals");
   if (!button) {
-    // v2: no generate button; just reload existing briefing
     await Promise.allSettled([loadSettings(), loadInterests(false), loadSignals(false)]);
     renderSignals();
     return;
@@ -582,9 +698,10 @@ function renderSignalCard(signal, listRank = 1) {
   const storedReason = signal.recommendation_reason_ko || "";
   const reasonKo = needsRecommendationRewrite(storedReason) ? "" : storedReason;
   const matchedKeywords = signal.matched_keywords || signal.metadata_json?.matched_keywords || [];
-  const sourceLabelText = signal.source_display || sourceLabel(signal.source_name || "출처 미확인");
+  const sourceLabelText = signal.source_display || (signal.source_name ? sourceLabel(signal.source_name) : "");
   const contentType = humanCategory(signal.category);
-  const dateText = signal.content_timestamp ? formatBriefingTimestamp(signal.content_timestamp) : "";
+  const dateText = signal.content_timestamp && !Number.isNaN(parseServerTimestamp(signal.content_timestamp).getTime())
+    ? formatBriefingTimestamp(signal.content_timestamp) : "";
   const preference = signal.recommendation_preference || "";
   return `
     <article class="signal-card" data-signal-id="${signal.id}">
@@ -592,7 +709,6 @@ function renderSignalCard(signal, listRank = 1) {
         <div class="rank">${listRank}</div>
         <div>
           <h3 class="signal-title" title="${escapeHtml(titleKo)}">${escapeHtml(titleKo)}</h3>
-          <div class="signal-meta compact"><span class="pill">${escapeHtml(sourceLabelText)}</span>${contentType ? `<span class="pill">${escapeHtml(contentType)}</span>` : ""}${dateText ? `<span class="pill">${escapeHtml(dateText)}</span>` : ""}</div>
           <p class="signal-summary">${escapeHtml(headlineSummaryKo)}</p>
         </div>
         <button class="bookmark-button ${signal.saved ? "is-saved" : ""}" type="button" data-toggle-saved aria-pressed="${signal.saved ? "true" : "false"}" aria-label="${signal.saved ? "저장 해제" : "저장"}" title="${signal.saved ? "저장 해제" : "저장"}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.75A1.75 1.75 0 0 1 7.75 3h8.5A1.75 1.75 0 0 1 18 4.75V21l-6-3.8L6 21V4.75Z"/></svg></button>
@@ -600,6 +716,7 @@ function renderSignalCard(signal, listRank = 1) {
       <div class="signal-body">
         ${reasonKo ? `<div class="recommendation-reason"><strong>왜 추천했나요?</strong><p>${escapeHtml(reasonKo)}</p></div>` : ""}
       </div>
+      ${sourceLabelText || contentType || dateText ? `<div class="signal-meta compact">${sourceLabelText ? `<span class="pill">${escapeHtml(sourceLabelText)}</span>` : ""}${contentType ? `<span class="pill">${escapeHtml(contentType)}</span>` : ""}${dateText ? `<span class="pill">${escapeHtml(dateText)}</span>` : ""}</div>` : ""}
       <div class="card-footer-actions">
         <div class="recommendation-control">
           <button class="button secondary" type="button" data-recommendation-menu aria-expanded="false">추천 조절</button>
@@ -609,8 +726,8 @@ function renderSignalCard(signal, listRank = 1) {
           </div>
         </div>
         <div class="actions card-primary-actions">
-          <button class="button secondary" data-open-url="${escapeHtml(sourceUrl)}" ${sourceUrl ? "" : "disabled"}>원문 보기</button>
-          <button class="button primary" data-ask-assistant="${signal.id}" data-signal-title="${escapeHtml(titleKo)}">AI에게 질문</button>
+          <button class="button primary" data-open-url="${escapeHtml(sourceUrl)}" ${sourceUrl ? "" : "disabled"}>원문 보기</button>
+          <button class="button secondary" data-ask-assistant="${signal.id}" data-signal-title="${escapeHtml(titleKo)}">AI에게 질문</button>
         </div>
       </div>
     </article>
@@ -751,6 +868,22 @@ function toggleRecommendationMenu(button) {
 const _dismissLocks = new Set();
 let _dismissGeneration = 0;
 
+const feedbackReasonOptions = {
+  ignored: [
+    ["unrelated_subtopic", "관심 없는 세부 주제"],
+    ["too_technical", "너무 전문적이거나 어려움"],
+    ["already_known", "이미 알고 있는 정보"],
+    ["not_needed_now", "지금 필요하지 않음"],
+    ["too_general", "정보가 너무 일반적임"],
+  ],
+  tracked: [
+    ["directly_relevant", "내 관심사와 직접 관련"],
+    ["practical_useful", "실제로 활용할 수 있음"],
+    ["easy_to_understand", "쉽게 이해할 수 있음"],
+    ["timely", "지금 확인할 만함"],
+  ],
+};
+
 async function setRecommendationPreference(button) {
   const card = button.closest(".signal-card");
   const signalId = card.dataset.signalId;
@@ -767,10 +900,21 @@ async function setRecommendationPreference(button) {
   // Capture the period at call time — if it changes mid-flight, discard stale results.
   const callPeriod = state.briefingPeriod;
   const callGeneration = ++_dismissGeneration;
+  // An earlier read must not put a card back while its dismissal is pending.
+  if (state.engineV2 && next === "ignored") ++state.signalLoadVersion;
+  const callLoadVersion = state.signalLoadVersion;
+  let optimisticDismiss = null;
 
   try {
     // Engine v2 dismiss path: remove card, backfill, show undo toast.
     if (state.engineV2 && next === "ignored") {
+      const dismissedIndex = state.signals.findIndex((s) => String(s.id) === String(signalId));
+      const dismissedSignal = dismissedIndex >= 0 ? state.signals[dismissedIndex] : null;
+      optimisticDismiss = { dismissedIndex, dismissedSignal };
+      if (dismissedIndex >= 0) {
+        state.signals.splice(dismissedIndex, 1);
+        renderSignals();
+      }
       const data = await api("/api/v1/engine/briefing/dismiss", {
         method: "POST",
         body: JSON.stringify({ signal_id: Number(signalId), period: callPeriod || "today" }),
@@ -779,12 +923,12 @@ async function setRecommendationPreference(button) {
       // Discard if period changed while awaiting.
       if (state.briefingPeriod !== callPeriod) return;
 
-      const dismissedIndex = state.signals.findIndex((s) => String(s.id) === String(signalId));
-      const dismissedSignal = dismissedIndex >= 0 ? state.signals[dismissedIndex] : null;
-
-      if (dismissedIndex >= 0) state.signals.splice(dismissedIndex, 1);
-
       const replacement = data.replacement;
+      // A read may have completed while the dismissal was in flight. Keep its
+      // result from restoring the dismissed card or duplicating the reserve.
+      state.signals = state.signals.filter((signal) =>
+        String(signal.id) !== String(signalId) && (!replacement || String(signal.id) !== String(replacement.id))
+      );
       if (replacement) {
         const insertAt = Math.min(dismissedIndex >= 0 ? dismissedIndex : state.signals.length, state.signals.length);
         state.signals.splice(insertAt, 0, replacement);
@@ -812,7 +956,7 @@ async function setRecommendationPreference(button) {
         } catch (err) {
           showToast(err.message || "되돌리지 못했어요.");
         }
-      });
+      }, { signalId, preference: "ignored" });
       return;
     }
 
@@ -835,10 +979,18 @@ async function setRecommendationPreference(button) {
       body: JSON.stringify({ preference: next }),
     });
     if (state.briefingPeriod !== callPeriod) return;
-    showToast(next === "tracked" ? "비슷한 소식을 더 추천할게요." : next === "ignored" ? "비슷한 소식을 줄일게요." : "추천 선택을 해제했어요.");
+    if (next === "tracked") showFeedbackReasonPrompt(signalId, "tracked", "비슷한 소식을 더 추천할게요.");
+    else if (next === "ignored") showFeedbackReasonPrompt(signalId, "ignored", "비슷한 소식을 줄일게요.");
+    else showToast("추천 선택을 해제했어요.");
     await loadSignals(false);
     renderSignals();
   } catch (error) {
+    if (optimisticDismiss?.dismissedSignal && state.briefingPeriod === callPeriod &&
+        state.signalLoadVersion === callLoadVersion &&
+        !state.signals.some((signal) => String(signal.id) === String(signalId))) {
+      state.signals.splice(Math.min(optimisticDismiss.dismissedIndex, state.signals.length), 0, optimisticDismiss.dismissedSignal);
+      renderSignals();
+    }
     showToast(error.message);
     button.disabled = false;
   } finally {
@@ -846,20 +998,136 @@ async function setRecommendationPreference(button) {
   }
 }
 
-function showToastWithUndo(message, onUndo) {
+// Feedback completion is intentionally compact.  Reason collection opens in
+// a separate, optional panel so a successful dismissal never expands into a
+// large notification over the briefing itself.
+const feedbackReasonLabels = {
+  unrelated_subtopic: "관심 없는 주제예요",
+  too_technical: "내용이 너무 어려워요",
+  already_known: "이미 알고 있는 소식이에요",
+  not_needed_now: "지금은 필요하지 않아요",
+  too_general: "내용이 너무 일반적이에요",
+  directly_relevant: "관심사와 직접 관련 있어요",
+  practical_useful: "실제로 도움이 돼요",
+  easy_to_understand: "이해하기 쉬워요",
+  timely: "지금 확인할 만해요",
+};
+
+function closeFeedbackReasonPanel() {
+  document.getElementById("feedback-reason-panel")?.remove();
+  document.body.classList.remove("feedback-reason-open");
+}
+
+function buildFeedbackReasonButton(signalId, preference) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "toast-reason";
+  button.textContent = "이유 알려주기";
+  button.addEventListener("click", async () => {
+    const supported = await supportsOptionalApi(
+      "/api/v1/signals/{signal_id}/recommendation-reason", "put"
+    );
+    if (supported === false) {
+      showToast("이유 저장 기능을 준비 중이에요. 페이지를 새로고침한 뒤 다시 시도해 주세요.");
+      return;
+    }
+    showFeedbackReasonPanel(signalId, preference);
+  });
+  return button;
+}
+
+function feedbackReasonSaveErrorMessage(error) {
+  // Do not expose framework messages such as "Not Found" in the feedback
+  // panel. A 404 here usually means a rolling deployment has served the new
+  // UI before the matching optional-reason route is available.
+  if (error?.status === 404) {
+    return "이유 저장 기능을 준비 중이에요. 페이지를 새로고침한 뒤 다시 시도해 주세요.";
+  }
+  if (error?.status === 400) {
+    return "현재 카드 평가와 이유가 맞지 않아요. 다시 평가한 뒤 이유를 선택해 주세요.";
+  }
+  return "이유를 저장하지 못했어요. 다시 시도해 주세요.";
+}
+
+function showFeedbackReasonPanel(signalId, preference) {
+  closeFeedbackReasonPanel();
+  const options = feedbackReasonOptions[preference] || [];
+  if (!options.length) return;
+  const panel = document.createElement("section");
+  panel.id = "feedback-reason-panel";
+  panel.className = "feedback-reason-panel";
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "false");
+  panel.setAttribute("aria-labelledby", "feedback-reason-title");
+  panel.innerHTML = `
+    <div class="feedback-reason-panel-heading">
+      <div><strong id="feedback-reason-title">추천이 맞지 않았던 이유</strong><p>선택하지 않아도 괜찮아요.</p></div>
+      <button type="button" class="feedback-reason-close" aria-label="이유 선택 닫기">×</button>
+    </div>
+    <div class="feedback-reason-options">${options.map(([code]) =>
+      `<button type="button" data-feedback-reason="${escapeHtml(code)}">${escapeHtml(feedbackReasonLabels[code] || code)}</button>`).join("")}</div>
+    <p class="feedback-reason-status" role="status" aria-live="polite"></p>`;
+  document.body.appendChild(panel);
+  document.body.classList.add("feedback-reason-open");
+  panel.querySelector(".feedback-reason-close")?.addEventListener("click", closeFeedbackReasonPanel);
+  panel.querySelector("[data-feedback-reason]")?.focus();
+  panel.querySelectorAll("[data-feedback-reason]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (panel.dataset.saving === "true") return;
+      panel.dataset.saving = "true";
+      panel.querySelectorAll("button").forEach((item) => { item.disabled = true; });
+      try {
+        await api(`/api/v1/signals/${encodeURIComponent(signalId)}/recommendation-reason`, {
+          method: "PUT", body: JSON.stringify({ preference, reason_code: button.dataset.feedbackReason }),
+        });
+        closeFeedbackReasonPanel();
+        showToast("의견을 반영했어요");
+      } catch (error) {
+        panel.dataset.saving = "false";
+        panel.querySelectorAll("button").forEach((item) => { item.disabled = false; });
+        const status = panel.querySelector(".feedback-reason-status");
+        if (status) status.textContent = feedbackReasonSaveErrorMessage(error);
+      }
+    });
+  });
+}
+
+function showToastWithUndo(message, onUndo, feedbackContext = null) {
   const toast = document.getElementById("toast");
   toast.innerHTML = "";
-  toast.appendChild(document.createTextNode(message + " "));
-  const undoBtn = document.createElement("button");
-  undoBtn.className = "toast-undo";
-  undoBtn.type = "button";
-  undoBtn.textContent = "실행 취소";
-  undoBtn.addEventListener("click", () => {
+  const text = document.createElement("span");
+  text.className = "toast-message";
+  text.textContent = feedbackContext?.preference === "ignored" ? "이 카드를 추천에서 제외했어요" : message;
+  const actions = document.createElement("span");
+  actions.className = "toast-actions";
+  const undo = document.createElement("button");
+  undo.className = "toast-undo";
+  undo.type = "button";
+  undo.textContent = "실행 취소";
+  undo.addEventListener("click", () => {
+    closeFeedbackReasonPanel();
     toast.classList.remove("show");
     clearTimeout(showToast.timer);
     onUndo();
   });
-  toast.appendChild(undoBtn);
+  actions.appendChild(undo);
+  if (feedbackContext) actions.appendChild(buildFeedbackReasonButton(feedbackContext.signalId, feedbackContext.preference));
+  toast.append(text, actions);
+  toast.classList.add("show");
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => toast.classList.remove("show"), 5000);
+}
+
+function showFeedbackReasonPrompt(signalId, preference, message) {
+  const toast = document.getElementById("toast");
+  toast.innerHTML = "";
+  const text = document.createElement("span");
+  text.className = "toast-message";
+  text.textContent = preference === "ignored" ? "이 카드를 추천에서 제외했어요" : message;
+  const actions = document.createElement("span");
+  actions.className = "toast-actions";
+  actions.appendChild(buildFeedbackReasonButton(signalId, preference));
+  toast.append(text, actions);
   toast.classList.add("show");
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => toast.classList.remove("show"), 5000);
@@ -870,7 +1138,10 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeRecommendationMenus();
+  if (event.key === "Escape") {
+    closeRecommendationMenus();
+    closeFeedbackReasonPanel();
+  }
 });
 
 async function loadInterests(render = true, scrollPosition = render ? captureScrollPosition() : null) {
@@ -907,9 +1178,42 @@ function renderInterests() {
     renderInterestRecommendations(container);
     return;
   }
-  container.innerHTML = state.interests.map(renderInterestCard).join("");
+  // Keep the clipped list surface separate from the auxiliary panels below it.
+  // Feedback and recommendations must not inherit the list's overflow boundary.
+  container.innerHTML = `<div class="interest-list">${state.interests.map(renderInterestCard).join("")}</div>`;
   bindInterestActions(container);
   renderInterestRecommendations(container);
+}
+
+function renderFeedbackLearningManagement() {
+  const container = document.getElementById("feedback-learning-management");
+  if (!container) return;
+  const learning = state.feedbackLearning;
+  if (!learning) { container.replaceChildren(); return; }
+  const preferences = Array.isArray(learning.preferences) ? learning.preferences : [];
+  container.innerHTML = `
+    <details class="feedback-learning-panel">
+      <summary class="feedback-learning-heading">
+        <div><h3 id="feedback-learning-management-title">내 평가 경향</h3><p>${preferences.length ? "반복된 평가에서 발견한 경향이에요." : "아직 발견된 평가 경향이 없어요."}</p></div>
+      </summary>
+      <div class="feedback-learning-content">
+        <div class="feedback-learning-items">${preferences.length ? preferences.map((preference) => `
+          <div class="feedback-learning-item"><span>${escapeHtml(preference.label)}</span>
+          <button class="button ghost" type="button" data-learning-action="reset-rule" data-feature="${escapeHtml(preference.feature)}" data-value="${escapeHtml(preference.value)}">초기화</button></div>`).join("")
+          : `<p class="feedback-learning-empty">아직 기록된 선호가 없어요.</p>`}</div>
+        ${preferences.length ? `<div class="feedback-learning-actions"><button class="button secondary" type="button" data-learning-action="reset-all">기록된 선호 초기화</button></div>` : ""}
+      </div>
+    </details>`;
+  container.querySelector("[data-learning-action='reset-all']")?.addEventListener("click", async () => {
+    try { await api("/api/v1/profile/feedback-learning", { method: "DELETE" }); await loadRecommendationSignals(); showToast("기록된 선호를 초기화했어요."); }
+    catch (error) { showToast(error.message); }
+  });
+  container.querySelectorAll("[data-learning-action='reset-rule']").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await api("/api/v1/profile/feedback-learning/rule", { method: "DELETE", body: JSON.stringify({ feature: button.dataset.feature, value: button.dataset.value }) });
+      await loadRecommendationSignals(); showToast("기록된 선호를 초기화했어요.");
+    } catch (error) { showToast(error.message); }
+  }));
 }
 
 function renderInterestRecommendations(container) {
@@ -917,7 +1221,7 @@ function renderInterestRecommendations(container) {
   if (!recommendations.length) return;
   const section = document.createElement("section");
   section.className = "interest-recommendations";
-  section.innerHTML = `<div class="recommendation-heading"><div><p class="eyebrow">추천 키워드</p><h3>관심사와 최근 흐름에서 찾았어요</h3></div><p>아직 내 관심사에는 없지만 함께 살펴볼 만한 키워드예요.</p></div><div class="recommendation-list">${recommendations.map(renderInterestRecommendation).join("")}</div>`;
+  section.innerHTML = `<div class="recommendation-heading"><div><h3>이런 관심사는 어때요?</h3><p>필요하다면 관심사에 추가해 보세요.</p></div></div><div class="recommendation-list">${recommendations.map(renderInterestRecommendation).join("")}</div>`;
   container.appendChild(section);
   section.querySelectorAll("[data-recommendation-action]").forEach((button) => {
     button.addEventListener("click", () => handleInterestRecommendation(button));
@@ -926,19 +1230,38 @@ function renderInterestRecommendations(container) {
 
 async function loadRecommendationSignals(render = true, scrollPosition = render ? captureScrollPosition() : null) {
   const container = document.getElementById("recommendation-signals-list");
-  const category = state.recommendationCategory;
-  document.querySelectorAll("[data-recommendation-category]").forEach((button) => {
-    const selected = button.dataset.recommendationCategory === category;
-    button.classList.toggle("active", selected);
-    button.setAttribute("aria-selected", String(selected));
-  });
-  if (render) showLoading(container.id, "추천 선택을 불러오고 있어요.");
+  const loadVersion = ++state.feedbackLoadVersion;
+  if (render) { setText("feedback-count", ""); showLoading(container.id, "평가 내역을 불러오고 있어요."); }
   try {
-    const data = await api(`/api/v1/signals/feedback/${category}`);
-    state.feedbackSignals = data.signals || [];
-    if (render) renderRecommendationSignals();
+    const feedbackLearningRequest = (async () => {
+      const supported = await supportsOptionalApi("/api/v1/profile/feedback-learning");
+      return supported === false ? null : api("/api/v1/profile/feedback-learning").catch(() => null);
+    })();
+    const [tracked, ignored, feedbackLearning] = await Promise.all([
+      api("/api/v1/signals/feedback/tracked"), api("/api/v1/signals/feedback/ignored"), feedbackLearningRequest,
+    ]);
+    if (loadVersion !== state.feedbackLoadVersion) return;
+    // Each existing feedback endpoint returns at most 100 items and does not
+    // provide a total, so do not claim an exhaustive count at that boundary.
+    state.feedbackPossiblyTruncated = (tracked.signals || []).length >= 100 || (ignored.signals || []).length >= 100;
+    const entries = [
+      ...(tracked.signals || []).map((signal) => ({ ...signal, recommendation_preference: "tracked" })),
+      ...(ignored.signals || []).map((signal) => ({ ...signal, recommendation_preference: "ignored" })),
+    ];
+    state.feedbackSignals = entries.sort((a, b) => {
+      const time = (item) => {
+        if (!item.feedback_at) return -Infinity;
+        const value = parseServerTimestamp(item.feedback_at).getTime();
+        return Number.isNaN(value) ? -Infinity : value;
+      };
+      return time(b) - time(a) || 0;
+    });
+    state.feedbackLearning = feedbackLearning;
+    if (render) { renderRecommendationSignals(); renderFeedbackLearningManagement(); }
   } catch (error) {
+    if (loadVersion !== state.feedbackLoadVersion) return;
     if (render) {
+      setText("feedback-count", "");
       container.innerHTML = emptyState("추천 선택을 불러오지 못했어요.", "잠시 후 다시 시도해주세요.", "새로고침", "retry-recommendations");
       bindEmptyAction("retry-recommendations", loadRecommendationSignals);
     }
@@ -949,10 +1272,9 @@ async function loadRecommendationSignals(render = true, scrollPosition = render 
 
 function renderRecommendationSignals() {
   const container = document.getElementById("recommendation-signals-list");
-  const more = state.recommendationCategory === "tracked";
-  setText("recommendation-category-description", more ? "비슷한 소식의 추천을 늘리는 데 참고해요." : "비슷한 소식의 추천을 줄이는 데 참고해요.");
+  setText("feedback-count", `${state.feedbackPossiblyTruncated ? "최근" : "총"} ${state.feedbackSignals.length}건`);
   if (!state.feedbackSignals.length) {
-    container.innerHTML = emptyState(more ? "더 보고 싶은 소식이 없어요." : "덜 보고 싶은 소식이 없어요.", "브리핑에서 추천 조절을 선택하면 이곳에서 바꿀 수 있어요.", "브리핑 보기", "open-signals");
+    container.innerHTML = `<div class="feedback-empty"><p>아직 평가한 소식이 없어요.</p><button class="button secondary" type="button" data-action="open-signals">브리핑 보기</button></div>`;
     bindEmptyAction("open-signals", () => setActiveTab("signals", { updateHash: true, load: true }));
     return;
   }
@@ -965,28 +1287,34 @@ function renderFeedbackSignalCard(signal, listRank) {
   const title = signal.display_title_ko || signal.title || "피드백한 소식";
   const summary = signal.headline_summary_ko || signal.display_summary_ko || signal.summary || "";
   const url = signal.source_url || "";
-  const keywordOrigin = keywordOriginText(signal);
-  const source = signal.source_display || sourceLabel(signal.source_name || "미확인");
-  return `<article class="signal-card" data-signal-id="${signal.id}"><div class="signal-head"><div class="rank">${listRank}</div><div><h3 class="signal-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h3><p class="signal-summary">${escapeHtml(summary)}</p></div></div><p class="signal-derived-from">${escapeHtml(keywordOrigin)}</p><div class="signal-meta"><span class="pill">출처 ${escapeHtml(source)}</span><span class="pill">설정한 날짜 ${escapeHtml(formatSavedDate(signal.feedback_at))}</span></div><div class="actions"><button class="button primary" data-open-url="${escapeHtml(url)}" ${url ? "" : "disabled"}>원문 보기</button><button class="button danger" data-clear-feedback>목록에서 빼기</button></div></article>`;
+  const keywords = (signal.matched_keywords || signal.metadata_json?.matched_keywords || []).slice(0, 3).map(String).filter(Boolean);
+  const source = signal.source_display || (signal.source_name ? sourceLabel(signal.source_name) : "");
+  const reason = feedbackReasonLabels[signal.feedback_reason_code] || "";
+  const more = (signal.recommendation_preference || state.recommendationCategory) === "tracked";
+  return `<article class="signal-card feedback-management-item" data-signal-id="${signal.id}">
+    <div class="feedback-item-content"><span class="feedback-item-rating">${more ? "더 보고 싶어요" : "덜 보고 싶어요"}</span><h3>${escapeHtml(title)}</h3>${summary ? `<p class="feedback-item-summary">${escapeHtml(summary)}</p>` : ""}<div class="feedback-item-meta">${source ? `<span>${escapeHtml(source)}</span>` : ""}${signal.feedback_at && !Number.isNaN(parseServerTimestamp(signal.feedback_at).getTime()) ? `<span>${escapeHtml(formatSavedDate(signal.feedback_at))}</span>` : ""}${keywords.length ? `<span>${escapeHtml(keywords.join(" · "))}</span>` : ""}${reason ? `<span>평가 이유: ${escapeHtml(reason)}</span>` : ""}</div></div>
+    <div class="feedback-item-actions">${url ? `<button class="button ghost" data-open-url="${escapeHtml(url)}">원문 보기</button>` : ""}<button class="button secondary" data-clear-feedback>${more ? "더 보기 취소" : "제외 취소"}</button></div></article>`;
 }
 
 async function clearFeedbackSignal(signalId, button) {
   const scrollPosition = captureScrollPosition();
+  const original = button.textContent;
   setBusy(button, true, "취소 중");
   try {
     await api(`/api/v1/signals/${signalId}/recommendation-preference`, { method: "PUT", body: JSON.stringify({ preference: null }) });
     state.feedbackSignals = state.feedbackSignals.filter((signal) => String(signal.id) !== String(signalId));
     renderRecommendationSignals();
     restoreScrollPosition(scrollPosition);
-    showToast("목록에서 뺐어요.");
+    showToast("평가를 취소했어요.");
+    await loadRecommendationSignals();
   } catch (error) {
     showToast(error.message);
-    setBusy(button, false, "설정 취소");
+    setBusy(button, false, original);
   }
 }
 
 function renderInterestRecommendation(recommendation) {
-  return `<article class="recommendation-card" data-keyword="${escapeHtml(recommendation.keyword)}"><div><strong>${escapeHtml(recommendation.keyword)}</strong><p>${escapeHtml(recommendation.reason)}</p></div><div class="recommendation-actions"><button class="button secondary" data-recommendation-action="add">추가</button><button class="button ghost" data-recommendation-action="dismiss">삭제</button></div></article>`;
+  return `<article class="recommendation-card" data-keyword="${escapeHtml(recommendation.keyword)}"><strong>${escapeHtml(recommendation.keyword)}</strong><div class="recommendation-actions"><button class="button secondary" data-recommendation-action="add">추가</button><button class="button ghost" data-recommendation-action="dismiss">추천에서 제외</button></div></article>`;
 }
 
 async function handleInterestRecommendation(button) {
@@ -1049,51 +1377,408 @@ async function addManualInterest(event) {
 }
 
 function renderInterestCard(interest) {
+  const selectedTypes = informationTypePreferencesFor(interest.keyword);
+  const selectedLabels = Array.isArray(interest.information_type_labels) ? interest.information_type_labels : selectedTypes;
+  const importance = interestImportance(interest.weight);
   return `
-    <article class="card interest-card" data-keyword="${escapeHtml(interest.keyword)}" data-interest-status="${escapeHtml(interest.status)}">
-      <div class="card-title"><h3>${escapeHtml(interest.keyword)}</h3>${interestStatusChip(interest.status)}</div>
-      ${renderImportanceDots(interest.weight)}
-      <div class="interest-actions">
-        <button class="button secondary" data-interest-action="up">중요도 올리기</button>
-        <button class="button secondary" data-interest-action="down">중요도 낮추기</button>
-        ${interest.status === "muted" ? `<button class="button secondary" data-interest-action="unmute">다시 사용</button>` : `<button class="button secondary" data-interest-action="mute">숨기기</button>`}
-        <button class="button danger" data-interest-action="delete">삭제</button>
+    <article class="interest-list-item" data-keyword="${escapeHtml(interest.keyword)}" data-interest-status="${escapeHtml(interest.status)}">
+      <div class="interest-card-header">
+        <div class="interest-list-main">
+          <h3>${escapeHtml(interest.keyword)}</h3>
+          ${selectedLabels.length ? `<div class="interest-type-chips" aria-label="선택한 정보 유형">${selectedLabels.map((label) => `<span class="interest-type-chip">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
+          ${interest.status === "muted" ? `<p class="interest-muted-label">잠시 숨김</p>` : ""}
+        </div>
+        <span class="interest-priority-badge">중요도: <strong>${escapeHtml(importance.label)}</strong></span>
+      </div>
+      <div class="interest-list-actions">
+        <button class="button secondary interest-edit-button" type="button" data-interest-action="edit" aria-label="${escapeHtml(interest.keyword)} 수정">수정</button>
       </div>
     </article>
   `;
 }
 
-function renderImportanceDots(weight) {
-  const level = Math.max(1, Math.min(5, Math.round(Number(weight) || 1)));
-  const dots = Array.from({ length: 5 }, (_, index) => `<span class="importance-dot${index < level ? " filled" : ""}" aria-hidden="true"></span>`).join("");
-  return `<div class="importance-dots" aria-label="중요도 ${level}단계, 5단계 중">${dots}</div>`;
+function interestImportance(weight) {
+  const numeric = Math.max(0, Number(weight) || 0);
+  const level = numeric < 0.75 ? "low" : numeric < 2 ? "medium" : "high";
+  return { level, label: { low: "낮음", medium: "보통", high: "높음" }[level] };
+}
+
+function importanceWeight(level) {
+  // Viewing does not round or rewrite an existing weight. These values are
+  // only sent when the reader explicitly changes the three-level setting.
+  return { low: 0.5, medium: 1, high: 2 }[level];
+}
+
+function informationTypePreferences() {
+  const raw = state.profile?.raw_onboarding_json || {};
+  return raw.interest_type_preferences && typeof raw.interest_type_preferences === "object"
+    ? raw.interest_type_preferences : {};
+}
+
+function informationTypePreferencesFor(keyword) {
+  const target = String(keyword || "").trim().toLocaleLowerCase();
+  const preferences = informationTypePreferences();
+  const entry = Object.entries(preferences).find(([storedKeyword]) => String(storedKeyword).trim().toLocaleLowerCase() === target);
+  return Array.isArray(entry?.[1]) ? entry[1] : [];
+}
+
+/* Retired modal editor. Card-local editing below owns the same API contract. */
+/*
+function closeInterestEditor({ restoreFocus = true } = {}) {
+  const modal = document.querySelector(".interest-editor-modal");
+  if (!modal) return;
+  const opener = modal._opener;
+  modal.remove();
+  if (restoreFocus && opener && document.contains(opener)) opener.focus();
+}
+
+function openInterestEditor(interest, opener) {
+  const selected = new Set(informationTypePreferencesFor(interest.keyword));
+  const options = Array.isArray(interest.information_type_options) ? interest.information_type_options : [];
+  const importance = interestImportance(interest.weight);
+  const modal = document.createElement("div");
+  modal.className = "interest-editor-modal";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-labelledby", "interest-editor-title");
+  modal._opener = opener;
+  modal.innerHTML = `
+    <div class="interest-editor-backdrop" data-interest-editor-close></div>
+    <section class="interest-editor-panel">
+      <header class="interest-editor-header">
+        <div><p class="eyebrow">관심사 설정</p><h3 id="interest-editor-title">${escapeHtml(interest.keyword)}</h3></div>
+        <button class="icon-button" type="button" aria-label="편집 닫기" data-interest-editor-close>×</button>
+      </header>
+      <div class="interest-editor-body">
+        ${options.length ? `<fieldset class="interest-editor-section"><legend>보고 싶은 소식 종류</legend><div class="interest-type-editor-options">${options.map((option) => `
+          <label class="information-type-option"><input type="checkbox" value="${escapeHtml(option.id)}" ${selected.has(option.id) ? "checked" : ""}><span>${escapeHtml(option.label)}</span></label>`).join("")}</div></fieldset>` : ""}
+        <fieldset class="interest-editor-section"><legend>중요도</legend><div class="importance-level-options" role="radiogroup" aria-label="중요도">${[["low", "낮음"], ["medium", "보통"], ["high", "높음"]].map(([value, label]) => `<label><input type="radio" name="interest-importance" value="${value}" ${importance.level === value ? "checked" : ""}><span>${label}</span></label>`).join("")}</div></fieldset>
+        <p class="interest-editor-error" role="alert" aria-live="polite"></p>
+        <div class="interest-editor-secondary-actions">
+          <button class="text-button" type="button" data-interest-editor-action="${interest.status === "muted" ? "unmute" : "mute"}">${interest.status === "muted" ? "다시 보기" : "잠시 숨기기"}</button>
+          <button class="text-button danger" type="button" data-interest-editor-action="delete">관심사 삭제</button>
+        </div>
+        <section class="interest-editor-delete-confirmation hidden" role="alertdialog" aria-label="관심사 삭제 확인"></section>
+      </div>
+      <footer class="interest-editor-footer"><button class="button secondary" type="button" data-interest-editor-close>취소</button><button class="button primary" type="button" data-interest-editor-action="save">저장</button></footer>
+    </section>`;
+  document.body.appendChild(modal);
+  modal.querySelector("[data-interest-editor-close]")?.focus();
+  modal.querySelectorAll("[data-interest-editor-close]").forEach((button) => button.addEventListener("click", () => closeInterestEditor()));
+  modal.querySelector("[data-interest-editor-action='save']")?.addEventListener("click", () => saveInterestEditor(interest, modal));
+  modal.querySelector("[data-interest-editor-action='mute']")?.addEventListener("click", () => toggleInterestMuted(interest, modal));
+  modal.querySelector("[data-interest-editor-action='unmute']")?.addEventListener("click", () => toggleInterestMuted(interest, modal));
+  modal.querySelector("[data-interest-editor-action='delete']")?.addEventListener("click", () => confirmInterestDeletion(interest, modal));
+}
+
+async function saveInterestTypePreferences(keyword, values) {
+  const epoch = interestAutosaveEpoch;
+  const next = { ...informationTypePreferences() };
+  const storedKey = Object.keys(next).find((item) => item.trim().toLocaleLowerCase() === String(keyword).trim().toLocaleLowerCase());
+  if (values.length) next[storedKey || keyword] = values;
+  else delete next[storedKey || keyword];
+  const result = await api("/api/v1/profile/information-type-preferences", {
+    method: "PUT", body: JSON.stringify({ interest_type_preferences: next }),
+  });
+  if (epoch === interestAutosaveEpoch) state.profile = result.profile;
+}
+
+function selectedInterestTypeValues(modal) {
+  return Array.from(modal.querySelectorAll(".interest-type-editor-options input:checked")).map((input) => input.value).sort();
+}
+
+function sameValues(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function editorError(modal, message = "") {
+  const node = modal.querySelector(".interest-editor-error");
+  if (node) node.textContent = message;
+}
+
+async function saveInterestEditor(interest, modal) {
+  const saveButton = modal.querySelector("[data-interest-editor-action='save']");
+  const typeEditor = modal.querySelector(".interest-type-editor-options");
+  const values = selectedInterestTypeValues(modal);
+  const current = informationTypePreferencesFor(interest.keyword).slice().sort();
+  const level = modal.querySelector("input[name='interest-importance']:checked")?.value;
+  const targetWeight = importanceWeight(level);
+  editorError(modal);
+  setBusy(saveButton, true, "저장 중");
+  try {
+    // Some precise interests have retained type labels but no editable options
+    // in the current taxonomy. Saving priority must never clear that data.
+    if (typeEditor && !sameValues(current, values)) await saveInterestTypePreferences(interest.keyword, values);
+    if (Number.isFinite(targetWeight) && targetWeight !== Number(interest.weight || 0)) {
+      await api(`/api/v1/interests/${encodeURIComponent(interest.keyword)}`, { method: "PUT", body: JSON.stringify({ weight: targetWeight }) });
+    }
+    closeInterestEditor({ restoreFocus: false });
+    await Promise.all([loadInterests(), loadSignals(false)]);
+    showToast("관심사 설정을 저장했어요.");
+  } catch (error) {
+    editorError(modal, "저장하지 못했어요. 잠시 후 다시 시도해 주세요.");
+    setBusy(saveButton, false, "저장");
+  }
+}
+
+async function toggleInterestMuted(interest, modal) {
+  const action = interest.status === "muted" ? "unmute" : "mute";
+  const button = modal.querySelector(`[data-interest-editor-action='${action}']`);
+  setBusy(button, true, action === "mute" ? "숨기는 중" : "다시 표시하는 중");
+  editorError(modal);
+  try {
+    await api(`/api/v1/interests/${encodeURIComponent(interest.keyword)}/${action}`, { method: "POST" });
+    closeInterestEditor({ restoreFocus: false });
+    await Promise.all([loadInterests(), loadSignals(false)]);
+    showToast(action === "mute" ? "관심사를 잠시 숨겼어요." : "관심사를 다시 표시해요.");
+  } catch (error) {
+    editorError(modal, "설정을 바꾸지 못했어요. 잠시 후 다시 시도해 주세요.");
+    setBusy(button, false, action === "mute" ? "잠시 숨기기" : "다시 보기");
+  }
+}
+
+function confirmInterestDeletion(interest, modal) {
+  const confirmation = modal.querySelector(".interest-editor-delete-confirmation");
+  confirmation.classList.remove("hidden");
+  confirmation.innerHTML = `<strong>관심사를 삭제할까요?</strong><p>관심사 목록에서만 삭제합니다. 필요한 경우 다시 추가할 수 있어요.</p><div><button class="button secondary" type="button" data-interest-delete-action="cancel">취소</button><button class="button danger" type="button" data-interest-delete-action="confirm">삭제</button></div>`;
+  confirmation.querySelector("[data-interest-delete-action='cancel']")?.addEventListener("click", () => confirmation.classList.add("hidden"));
+  confirmation.querySelector("[data-interest-delete-action='confirm']")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    setBusy(button, true, "삭제 중");
+    try {
+      await api(`/api/v1/interests/${encodeURIComponent(interest.keyword)}`, { method: "DELETE" });
+      closeInterestEditor({ restoreFocus: false });
+      await Promise.all([loadInterests(), loadSignals(false)]);
+      showToast("관심사를 삭제했어요.");
+    } catch (error) {
+      editorError(modal, "삭제하지 못했어요. 잠시 후 다시 시도해 주세요.");
+      setBusy(button, false, "삭제");
+    }
+  });
+  confirmation.querySelector("[data-interest-delete-action='cancel']")?.focus();
 }
 
 function bindInterestActions(container) {
-  container.querySelectorAll("[data-interest-action]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const card = button.closest(".card");
-      const keyword = card.dataset.keyword;
-      const action = button.dataset.interestAction;
-      const interest = state.interests.find((item) => item.keyword === keyword) || { weight: 1 };
-      const original = button.textContent;
-      setBusy(button, true, "저장 중");
-      try {
-        if (action === "mute") await api(`/api/v1/interests/${encodeURIComponent(keyword)}/mute`, { method: "POST" });
-        if (action === "unmute") await api(`/api/v1/interests/${encodeURIComponent(keyword)}/unmute`, { method: "POST" });
-        if (action === "delete") await api(`/api/v1/interests/${encodeURIComponent(keyword)}`, { method: "DELETE" });
-        if (action === "up" || action === "down") {
-          const nextWeight = Math.max(0.1, Number(interest.weight || 1) + (action === "up" ? 1 : -1));
-          await api(`/api/v1/interests/${encodeURIComponent(keyword)}`, { method: "PUT", body: JSON.stringify({ weight: nextWeight }) });
-        }
-        showToast("관심사 설정을 반영했어요");
-        await Promise.all([loadInterests(), loadSignals(false)]);
-      } catch (error) {
-        showToast(error.message);
-      } finally {
-        setBusy(button, false, original);
-      }
+  container.querySelectorAll("[data-interest-action='edit']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const row = button.closest("[data-keyword]");
+      const interest = state.interests.find((item) => item.keyword === row?.dataset.keyword);
+      if (interest) openInterestEditor(interest, button);
     });
+  });
+}
+
+*/
+
+async function saveInterestTypePreferences(keyword, values) {
+  const epoch = interestAutosaveEpoch;
+  const next = { ...informationTypePreferences() };
+  const storedKey = Object.keys(next).find((item) => item.trim().toLocaleLowerCase() === String(keyword).trim().toLocaleLowerCase());
+  if (values.length) next[storedKey || keyword] = values;
+  else delete next[storedKey || keyword];
+  const result = await api("/api/v1/profile/information-type-preferences", {
+    method: "PUT", body: JSON.stringify({ interest_type_preferences: next }),
+  });
+  if (epoch === interestAutosaveEpoch) state.profile = result.profile;
+}
+
+function sameValues(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+// Card-local drafts deliberately stay in memory until the reader chooses
+// 저장. They never mutate an interest or the profile while the card is edited.
+function interestDraftFor(interest) {
+  const key = interest.keyword;
+  if (!state.interestDrafts[key]) {
+    state.interestDrafts[key] = {
+      typeIds: informationTypePreferencesFor(key).slice().sort(),
+      importance: interestImportance(interest.weight).level,
+      typesOpen: false,
+      deleteConfirm: false,
+      error: "",
+    };
+  }
+  return state.interestDrafts[key];
+}
+
+function labelsForInterestTypes(interest, typeIds) {
+  const options = Array.isArray(interest.information_type_options) ? interest.information_type_options : [];
+  const labels = new Map(options.map((option) => [option.id, option.label]));
+  const stored = Array.isArray(interest.information_type_labels) ? interest.information_type_labels : [];
+  return typeIds.map((typeId, index) => labels.get(typeId) || stored[index] || typeId);
+}
+
+function interestDraftChanged(interest, draft) {
+  const currentTypes = informationTypePreferencesFor(interest.keyword).slice().sort();
+  return !sameValues(currentTypes, draft.typeIds.slice().sort())
+    || interestImportance(interest.weight).level !== draft.importance;
+}
+
+function renderInterestCard(interest) {
+  const draft = interestDraftFor(interest);
+  const options = Array.isArray(interest.information_type_options) ? interest.information_type_options : [];
+  const labels = labelsForInterestTypes(interest, draft.typeIds);
+  const muted = interest.status === "muted";
+  return `
+    <article class="interest-list-item" data-keyword="${escapeHtml(interest.keyword)}" data-interest-status="${escapeHtml(interest.status)}">
+      <header class="interest-card-header">
+        <div class="interest-list-main"><h3>${escapeHtml(interest.keyword)}</h3>${muted ? `<p class="interest-muted-label">잠시 숨김</p>` : ""}</div>
+      </header>
+      ${labels.length || options.length ? `<section class="interest-card-section interest-card-types" aria-label="보고 싶은 소식">
+        <div class="interest-card-section-heading"><span>보고 싶은 소식</span>${options.length ? `<button class="text-button" type="button" data-interest-action="toggle-types">${labels.length ? "소식 종류 수정" : "+ 소식 종류 선택"}</button>` : ""}</div>
+        ${labels.length ? `<div class="interest-type-chips" aria-label="선택한 정보 유형">${labels.map((label) => `<span class="interest-type-chip">${escapeHtml(label)}</span>`).join("")}</div>` : ""}
+        ${draft.typesOpen && options.length ? `<div class="interest-type-editor-options interest-card-type-editor">${options.map((option) => `<label class="information-type-option"><input type="checkbox" data-interest-type="${escapeHtml(option.id)}" ${draft.typeIds.includes(option.id) ? "checked" : ""}><span>${escapeHtml(option.label)}</span></label>`).join("")}</div>` : ""}
+      </section>` : ""}
+      <section class="interest-card-section" aria-label="중요도">
+        <span class="interest-card-section-label">중요도</span>
+        <div class="importance-level-options interest-card-importance" role="radiogroup" aria-label="${escapeHtml(interest.keyword)} 중요도">${[["low", "낮음"], ["medium", "보통"], ["high", "높음"]].map(([value, label]) => `<button type="button" role="radio" aria-checked="${draft.importance === value}" class="${draft.importance === value ? "selected" : ""}" data-interest-action="importance" data-importance="${value}">${label}</button>`).join("")}</div>
+      </section>
+      <footer class="interest-card-footer">
+        <div class="interest-card-management"><button class="text-button" type="button" data-interest-action="toggle-muted">${muted ? "다시 보기" : "잠시 숨기기"}</button><button class="text-button danger" type="button" data-interest-action="delete">관심사 삭제</button></div>
+        ${draft.deleteConfirm ? `<div class="interest-card-delete-confirmation" role="alert"><p>이 관심사를 삭제할까요?</p><div><button class="button secondary" type="button" data-interest-action="delete-cancel">취소</button><button class="button danger" type="button" data-interest-action="delete-confirm">삭제</button></div></div>` : ""}
+        ${draft.error ? `<p class="interest-card-error" role="alert">${escapeHtml(draft.error)}</p>` : ""}
+      </footer>
+    </article>`;
+}
+
+// The information-type endpoint replaces the complete profile map. Serialize
+// all card writes so concurrent interests cannot overwrite one another.
+let interestAutosaveQueue = Promise.resolve();
+let interestAutosaveEpoch = 0;
+function queueInterestAutosave(interest, kind, debounce = false) {
+  const draft = interestDraftFor(interest);
+  if (kind === "types") {
+    clearTimeout(draft.timer);
+    draft.timer = null;
+    if (debounce) {
+      draft.timer = setTimeout(() => { draft.timer = null; queueInterestAutosave(interest, kind); }, 350);
+      return;
+    }
+  }
+  draft.pending = (draft.pending || 0) + 1;
+  draft.saving = true;
+  draft.savingSince = draft.savingSince || Date.now();
+  clearTimeout(draft.savingDisplayTimer);
+  const epoch = interestAutosaveEpoch;
+  interestAutosaveQueue = interestAutosaveQueue.catch(() => {}).then(async () => {
+    if (epoch !== interestAutosaveEpoch) return;
+    const target = kind === "types" ? draft.typeIds.slice().sort() : draft.importance;
+    try {
+      if (kind === "types") {
+        const previous = informationTypePreferencesFor(interest.keyword).slice().sort();
+        if (!sameValues(previous, target)) await saveInterestTypePreferences(interest.keyword, target);
+      } else if (interestImportance(interest.weight).level !== target) {
+        await api(`/api/v1/interests/${encodeURIComponent(interest.keyword)}`, { method: "PUT", body: JSON.stringify({ weight: importanceWeight(target) }) });
+        interest.weight = importanceWeight(target);
+        const current = state.interests.find((item) => item.keyword === interest.keyword);
+        if (current) current.weight = interest.weight;
+      }
+      draft.error = "";
+    } catch (_) {
+      if (epoch === interestAutosaveEpoch) {
+        if (kind === "types" && sameValues(draft.typeIds.slice().sort(), target)) draft.typeIds = informationTypePreferencesFor(interest.keyword).slice().sort();
+        if (kind === "importance" && draft.importance === target) draft.importance = interestImportance(interest.weight).level;
+        draft.error = "저장하지 못했어요. 다시 선택해 주세요.";
+      }
+    } finally {
+      draft.pending = Math.max(0, draft.pending - 1);
+      if (draft.pending === 0) {
+        const remaining = Math.max(0, 800 - (Date.now() - draft.savingSince));
+        draft.savingDisplayTimer = setTimeout(() => {
+          if (draft.pending === 0) { draft.saving = false; draft.savingSince = 0; }
+          if (epoch === interestAutosaveEpoch && state.activeTab === "interests") renderInterests();
+        }, remaining);
+      }
+      if (epoch === interestAutosaveEpoch && state.activeTab === "interests") renderInterests();
+    }
+  });
+}
+
+window.addEventListener("beforeunload", (event) => {
+  if (Object.values(state.interestDrafts).some((draft) => draft.saving || draft.timer)) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+
+async function saveInterestCardDraft(interest, button) {
+  const draft = interestDraftFor(interest);
+  const currentTypes = informationTypePreferencesFor(interest.keyword).slice().sort();
+  const nextTypes = draft.typeIds.slice().sort();
+  const targetWeight = importanceWeight(draft.importance);
+  draft.error = "";
+  setBusy(button, true, "저장 중");
+  try {
+    if (!sameValues(currentTypes, nextTypes)) await saveInterestTypePreferences(interest.keyword, nextTypes);
+    if (Number.isFinite(targetWeight) && targetWeight !== Number(interest.weight || 0)) {
+      await api(`/api/v1/interests/${encodeURIComponent(interest.keyword)}`, { method: "PUT", body: JSON.stringify({ weight: targetWeight }) });
+      interest.weight = targetWeight;
+    }
+    delete state.interestDrafts[interest.keyword];
+    await Promise.all([loadInterests(), loadSignals(false)]);
+    showToast("관심사 설정을 저장했어요.");
+  } catch (_) {
+    draft.error = "저장하지 못했어요. 잠시 후 다시 시도해 주세요.";
+    renderInterests();
+  }
+}
+
+async function toggleInterestMutedInline(interest, button) {
+  const pending = interestDraftFor(interest);
+  if (pending.timer || pending.saving) { pending.error = "저장이 끝난 후 다시 시도해 주세요."; renderInterests(); return; }
+  const action = interest.status === "muted" ? "unmute" : "mute";
+  setBusy(button, true, action === "mute" ? "숨기는 중" : "다시 표시하는 중");
+  try {
+    await api(`/api/v1/interests/${encodeURIComponent(interest.keyword)}/${action}`, { method: "POST" });
+    delete state.interestDrafts[interest.keyword];
+    await Promise.all([loadInterests(), loadSignals(false)]);
+    showToast(action === "mute" ? "관심사를 잠시 숨겼어요." : "관심사를 다시 표시해요.");
+  } catch (_) {
+    const draft = interestDraftFor(interest);
+    draft.error = "설정을 바꾸지 못했어요. 잠시 후 다시 시도해 주세요.";
+    renderInterests();
+  }
+}
+
+async function deleteInterestInline(interest, button) {
+  const pending = interestDraftFor(interest);
+  if (pending.timer || pending.saving) { pending.error = "저장이 끝난 후 다시 시도해 주세요."; renderInterests(); return; }
+  setBusy(button, true, "삭제 중");
+  try {
+    await api(`/api/v1/interests/${encodeURIComponent(interest.keyword)}`, { method: "DELETE" });
+    delete state.interestDrafts[interest.keyword];
+    await Promise.all([loadInterests(), loadSignals(false)]);
+    showToast("관심사를 삭제했어요.");
+  } catch (_) {
+    const draft = interestDraftFor(interest);
+    draft.error = "삭제하지 못했어요. 잠시 후 다시 시도해 주세요.";
+    renderInterests();
+  }
+}
+
+function bindInterestActions(container) {
+  container.querySelectorAll("[data-keyword]").forEach((card) => {
+    const interest = state.interests.find((item) => item.keyword === card.dataset.keyword);
+    if (!interest) return;
+    card.querySelectorAll("[data-interest-action]").forEach((button) => button.addEventListener("click", () => {
+      const action = button.dataset.interestAction;
+      const draft = interestDraftFor(interest);
+      if (action === "toggle-types") { draft.typesOpen = !draft.typesOpen; renderInterests(); }
+      if (action === "importance" && draft.importance !== button.dataset.importance) { draft.importance = button.dataset.importance; draft.error = ""; queueInterestAutosave(interest, "importance"); renderInterests(); }
+      if (action === "toggle-muted") toggleInterestMutedInline(interest, button);
+      if (action === "delete") { draft.deleteConfirm = true; renderInterests(); }
+      if (action === "delete-cancel") { draft.deleteConfirm = false; renderInterests(); }
+      if (action === "delete-confirm") deleteInterestInline(interest, button);
+    }));
+    card.querySelectorAll("[data-interest-type]").forEach((input) => input.addEventListener("change", () => {
+      const draft = interestDraftFor(interest);
+      const typeId = input.dataset.interestType;
+      draft.typeIds = input.checked ? [...new Set([...draft.typeIds, typeId])] : draft.typeIds.filter((item) => item !== typeId);
+      draft.error = "";
+      queueInterestAutosave(interest, "types", true);
+      renderInterests();
+    }));
   });
 }
 
@@ -1101,30 +1786,26 @@ async function loadSources(scrollPosition = captureScrollPosition()) {
   const container = document.getElementById("sources-list");
   showLoading("sources-list", "소스 설정을 확인하고 있어요.");
   try {
-    const [catalogData, configData] = await Promise.all([api("/api/v1/sources/catalog"), api("/api/v1/sources/configs")]);
+    const catalogData = await api("/api/v1/sources/catalog");
     state.sources = catalogData.sources || [];
-    const sources = sourceOrder.map((id) => state.sources.find((source) => source.source_id === id)).filter(Boolean);
-    const enabledCount = sources.filter((source) => source.current_enabled).length;
-    const emptyBanner = !enabledCount
-      ? `<div class="empty-state"><h3>사용 중인 소스가 없어요.</h3><p>Hacker News, GitHub, RSS 중 하나를 사용하면 소식을 만들 수 있어요.</p><button class="button primary" data-action="seed-sources">기본 소스 사용하기</button></div>`
-      : "";
+    // The catalogue's availability is not proof of a user-scoped pilot or
+    // actual collection. Only show routable selections with ordinary access.
+    const sources = state.sources.filter((source) => source.available === true && source.implemented_status === "implemented" && source.effective_enabled === true && source.source_id !== "opendart");
+    const names = { hackernews: "Hacker News", github: "GitHub", rss: "RSS", official_ai_blogs: "공식 AI 블로그", company_newsroom: "기업 뉴스룸", youtube: "YouTube", crossref: "Crossref", openalex: "OpenAlex", producthunt: "Product Hunt", reddit: "Reddit", naver_news: "네이버 뉴스", arxiv: "arXiv", mss_bizinfo: "중소벤처기업 지원사업", mss_support_program: "중소벤처기업 지원사업", public_institution_jobs: "공공기관 채용", public_service_jobs: "공공부문 채용", seoul_culture_events: "서울 문화행사", kopis: "KOPIS", youthcenter_policy: "온통청년", tourapi: "한국관광공사 TourAPI", employment24: "고용24", msit_announcements: "과학기술정보통신부 공고", msit_business_rss: "과학기술정보통신부 사업공고", msit_recruitment_rss: "과학기술정보통신부 채용공고", geeknews: "GeekNews", kisa_press: "KISA 보도자료", kisa_research: "KISA 연구보고서" };
     const region = state.settings?.source_region_preference || "both";
     container.innerHTML = `
       <section class="source-settings-panel" aria-labelledby="source-settings-heading">
-        <p class="eyebrow">개인화 추천</p>
-        <h2 id="source-settings-heading">소식 소스 설정</h2>
-        <p class="source-settings-description">관심사에 맞는 소식 출처를 자동으로 추천해 드려요. 원하는 지역과 출처는 언제든 조정할 수 있어요.</p>
-        <div class="source-settings-section"><div class="source-settings-section-heading"><h3>어느 지역의 소식을 더 볼까요?</h3><p>선택한 지역을 우선으로 소식을 추천해요.</p></div>
+        <h2 id="source-settings-heading">소식 지역</h2>
+        <div class="source-settings-section">
         <div class="region-options" role="radiogroup" aria-label="소식 지역 선택">
-          ${renderRegionOption("both", "국내 + 해외 모두", "국내 변화와 해외 흐름을 함께 추천해요.", "균형 추천", region)}
-          ${renderRegionOption("domestic", "국내 소식 중심", "한국의 뉴스, 산업, 취업, 정책을 우선해서 살펴봐요.", "국내 우선", region)}
-          ${renderRegionOption("international", "해외 소식 중심", "글로벌 기술, 연구, 비즈니스 흐름을 우선해서 살펴봐요.", "글로벌 우선", region)}
+          ${renderRegionOption("both", "국내 + 해외 모두", "두 지역에 관심이 있어요.", "모두", region)}
+          ${renderRegionOption("domestic", "국내 소식 중심", "국내 소식에 더 관심이 있어요.", "국내 선호", region)}
+          ${renderRegionOption("international", "해외 소식 중심", "해외 소식에 더 관심이 있어요.", "해외 선호", region)}
         </div></div>
-        <p class="region-helper">선택하지 않은 지역의 중요한 소식도 함께 추천될 수 있어요.</p>
-        <details class="source-management"><summary><span>개별 소스 관리</span><small>고급 옵션</small></summary><div class="source-management-content"><p>자동 추천을 그대로 사용하거나, 원하는 출처만 직접 설정할 수 있어요.</p>${emptyBanner}<div class="source-management-list">${sources.map(renderSourceManagementCard).join("")}</div></div></details>
+        <p class="region-helper">표시되는 소식은 관심사와 이용 가능한 출처에 따라 달라져요.</p>
+        <details class="source-available"><summary>참고 정보원</summary><p>관심사와 소식의 유무에 따라 실제 참고하는 출처는 달라져요.</p>${sources.length ? `<div class="source-available-list">${sources.map((source) => `<span>${escapeHtml(names[source.source_id] || source.display_name || source.source_id)}</span>`).join("")}</div>` : `<p>현재 표시할 수 있는 출처가 없어요.</p>`}</details>
       </section>`;
     bindSourceActions(container);
-    bindEmptyAction("seed-sources", seedDefaultSources);
   } catch (error) {
     container.innerHTML = emptyState("잠시 연결이 불안정해요.", "다시 시도해보세요.", "새로고침", "retry-sources");
     bindEmptyAction("retry-sources", loadSources);
@@ -1134,7 +1815,7 @@ async function loadSources(scrollPosition = captureScrollPosition()) {
 }
 
 function renderRegionOption(value, title, description, tag, selected) {
-  return `<label class="region-option"><input class="visually-hidden" type="radio" name="source-region" value="${value}" ${value === selected ? "checked" : ""} /><span class="region-option-content"><strong>${title}</strong><span class="region-option-tag">${tag}</span><small>${description}</small></span></label>`;
+  return `<label class="region-option"><input class="visually-hidden" type="radio" name="source-region" value="${value}" ${value === selected ? "checked" : ""} /><span class="region-option-content"><strong>${title}</strong></span></label>`;
 }
 
 function renderSourceManagementCard(source) {
@@ -1259,13 +1940,20 @@ function bindSourceActions(container) {
   /* ── Region preference: auto-save ── */
   container.querySelectorAll("input[name='source-region']").forEach((input) => {
     input.addEventListener("change", async () => {
+      if (state.settingsSaving) return;
+      const previous = state.settings?.source_region_preference || "both";
+      state.settingsSaving = true;
+      setSettingsControlsBusy(true);
       try {
         const data = await api("/api/v1/settings", { method: "PUT", body: JSON.stringify({ source_region_preference: input.value }) });
         state.settings = data.settings;
         showToast("소식 지역 설정을 저장했어요.");
       } catch (error) {
-        showToast(error.message);
-        await loadSources();
+        container.querySelectorAll("input[name='source-region']").forEach((radio) => { radio.checked = radio.value === previous; });
+        showToast("지역 설정을 저장하지 못했어요. 다시 시도해 주세요.");
+      } finally {
+        state.settingsSaving = false;
+        setSettingsControlsBusy(false);
       }
     });
   });
@@ -1342,130 +2030,58 @@ function renderActivityItem(item) {
   `;
 }
 
-function openOnboarding() {
-  document.getElementById("onboarding-modal").classList.remove("hidden");
-  setOnboardingStep(1);
-}
-
-function closeOnboarding() {
-  document.getElementById("onboarding-modal").classList.add("hidden");
-}
-
-function setOnboardingStep(step) {
-  state.onboardingStep = Math.max(1, Math.min(3, step));
-  document.querySelectorAll(".onboarding-step").forEach((panel) => panel.classList.toggle("active", Number(panel.dataset.step) === state.onboardingStep));
-  document.querySelectorAll("[data-step-dot]").forEach((dot) => dot.classList.toggle("active", Number(dot.dataset.stepDot) <= state.onboardingStep));
-  document.getElementById("onboarding-prev").disabled = state.onboardingStep === 1;
-  document.getElementById("onboarding-next").classList.toggle("hidden", state.onboardingStep === 3);
-  document.getElementById("onboarding-submit").classList.toggle("hidden", state.onboardingStep !== 3);
-}
-
-function addKeyword(value) {
-  String(value || "").split(",").map((item) => item.trim()).filter(Boolean).forEach((keyword) => {
-    if (!state.onboardingKeywords.includes(keyword)) state.onboardingKeywords.push(keyword);
-  });
-  renderKeywordTags();
-}
-
-function renderKeywordTags() {
-  const row = document.getElementById("keyword-tags");
-  row.innerHTML = state.onboardingKeywords.map((keyword) => `<button type="button" class="tag" data-remove-keyword="${escapeHtml(keyword)}">${escapeHtml(keyword)} ×</button>`).join("");
-  row.querySelectorAll("[data-remove-keyword]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.onboardingKeywords = state.onboardingKeywords.filter((item) => item !== button.dataset.removeKeyword);
-      renderKeywordTags();
-    });
-  });
-}
-
-async function completeOnboarding(event) {
-  event.preventDefault();
-  addKeyword(document.getElementById("keyword-input").value);
-  document.getElementById("keyword-input").value = "";
-  if (!state.onboardingKeywords.length) {
-    showToast("관심 키워드를 하나 이상 입력해주세요.");
-    setOnboardingStep(2);
-    return;
-  }
-  const submit = document.getElementById("onboarding-submit");
-  const original = submit.textContent;
-  setBusy(submit, true, "첫 소식을 준비하는 중");
-  try {
-    const roleCustom = document.getElementById("onboarding-role-custom").value.trim();
-    const role = roleCustom || state.onboardingRole;
-    const signalCount = Number(document.getElementById("onboarding-signal-count").value || 3);
-    const browserEnabled = document.getElementById("onboarding-browser").checked;
-    const localEnabled = document.getElementById("onboarding-local").checked;
-    const folders = document.getElementById("onboarding-local-folders").value.split("\n").map((line) => line.trim()).filter(Boolean);
-
-    await api("/api/v1/onboarding", {
-      method: "POST",
-      body: JSON.stringify({
-        role,
-        role_detail: role,
-        goals: ["오늘 볼 소식을 빠르게 이해하기"],
-        interest_types: state.onboardingKeywords,
-        keywords: state.onboardingKeywords,
-        preferred_signal_count: signalCount,
-        connectors: { browser_history: browserEnabled, local_files: localEnabled },
-      }),
-    });
-    await api("/api/v1/settings", {
-      method: "PUT",
-      body: JSON.stringify({ signal_count: signalCount }),
-    });
-    await api("/api/v1/sources/configs/seed-defaults", { method: "POST", body: JSON.stringify({ overwrite: false }) });
-    await Promise.allSettled([loadProfile(), loadSettings(), loadConnectors(), loadInterests(false)]);
-    closeOnboarding();
-    switchTab("signals");
-    await generateSignals(submit);
-    showToast("첫 오늘의 소식이 준비됐어요.");
-  } catch (error) {
-    showToast(error.message);
-  } finally {
-    setBusy(submit, false, original);
-  }
-}
-
 async function saveSettings(event) {
   event.preventDefault();
-  const scrollPosition = captureScrollPosition();
-  const submit = event.submitter || event.currentTarget.querySelector("button[type='submit']");
-  const original = submit.textContent;
-  setBusy(submit, true, "저장 중");
+  const select = document.getElementById("setting-signal-count");
+  const status = document.getElementById("signal-count-save-status");
+  const selectedCount = Number(select.value);
+  if (!state.briefingDisplayMax || !Number.isInteger(selectedCount) || selectedCount < 1 || selectedCount > state.briefingDisplayMax) {
+    renderSignalCountGateNote();
+    return;
+  }
+  if (state.settingsSaving || selectedCount === Number(state.settings?.signal_count)) return;
+  state.settingsSaving = true;
+  setSettingsControlsBusy(true);
+  status.textContent = "저장 중…";
   try {
-    await api("/api/v1/settings", {
+    const result = await api("/api/v1/settings", {
       method: "PUT",
       body: JSON.stringify({
-        signal_count: Number(document.getElementById("setting-signal-count").value),
+        signal_count: selectedCount,
       }),
     });
-    showToast("설정을 저장했어요");
-    await Promise.allSettled([loadSettings(), loadConnectors()]);
+    state.settings = result.settings;
+    status.textContent = "저장했어요.";
   } catch (error) {
-    showToast(error.message);
+    status.textContent = "저장하지 못했어요. 다시 선택해 주세요.";
   } finally {
-    setBusy(submit, false, original);
-    restoreScrollPosition(scrollPosition);
+    state.settingsSaving = false;
+    setSettingsControlsBusy(false);
+    renderSettings();
   }
+}
+
+function setSettingsControlsBusy(busy) {
+  const select = document.getElementById("setting-signal-count");
+  if (select) select.disabled = busy || !state.briefingDisplayMax;
+  document.querySelectorAll("input[name='source-region']").forEach((input) => { input.disabled = busy; });
 }
 
 function renderSettings() {
   if (!state.settings) return;
   renderAccountShell();
   renderGateSummary();
-  setValue("setting-signal-count", state.settings.signal_count || 3);
-  renderSignalCountGateNote();
-  // Hide the 7-option if free plan limit is 5
-  const option7 = document.getElementById("signal-count-option-7");
-  if (option7) {
-    const signalGate = (state.featureGates?.gates || []).find((gate) => gate.feature_key === "today_signal_count");
-    const limit = Number(signalGate?.limit_value || 5);
-    if (limit <= 5) {
-      option7.disabled = true;
-      option7.textContent = "7개 (상위 플랜)";
-    }
+  const select = document.getElementById("setting-signal-count");
+  const savedCount = Math.max(1, Number(state.settings.signal_count || 3));
+  const max = state.briefingDisplayMax;
+  if (select) {
+    select.disabled = !max || Boolean(state.settingsSaving);
+    select.innerHTML = max
+      ? `${savedCount > max ? `<option value="${savedCount}" disabled>저장된 설정: ${savedCount}개</option>` : ""}${Array.from({ length: max }, (_, i) => `<option value="${i + 1}">${i + 1}개</option>`).join("")}`
+      : '<option value="">설정을 확인할 수 없어요</option>';
+    if (max) select.value = String(savedCount);
   }
+  renderSignalCountGateNote();
 }
 
 function initAuthShell() {
@@ -1656,12 +2272,10 @@ function renderSignalCountGateNote() {
   const note = document.getElementById("signal-count-gate-note");
   const select = document.getElementById("setting-signal-count");
   if (!note || !select) return;
-  const signalGate = (state.featureGates?.gates || []).find((gate) => gate.feature_key === "today_signal_count");
-  const limit = Number(signalGate?.limit_value || 3);
-  const value = Number(select.value || 3);
-  note.textContent = value > limit
-    ? `현재는 저장할 수 있어요. 다만 ${state.featureGates?.plan || "Free"} 기준에서는 오늘의 소식 ${limit}개가 기본이에요.`
-    : "";
+  const limit = state.briefingDisplayMax;
+  const value = Number(select.value);
+  note.textContent = !limit ? "설정 가능한 소식 수를 확인하지 못했어요. 새로고침해 주세요."
+    : value > limit ? `현재 설정은 ${value}개지만 브리핑에는 최대 ${limit}개가 표시돼요. 저장하려면 개수를 다시 선택해 주세요.` : "";
 }
 
 function gateTitle(key) {
@@ -1752,7 +2366,9 @@ function statusPill(status) {
 }
 
 function interestStatusChip(status) {
-  const labels = { active: "사용 중", muted: "숨김", deleted: "삭제됨" };
+  // This label describes only the reader's interest setting. Availability of
+  // a matching live source is communicated separately in the card body.
+  const labels = { active: "관심사 설정됨", muted: "브리핑에서 숨김", deleted: "삭제됨" };
   const className = status === "active" ? "ready" : status === "muted" ? "warning" : "off";
   return `<span class="status-chip ${className}">${labels[status] || "사용 중"}</span>`;
 }
@@ -2197,12 +2813,16 @@ async function handleLogout() {
  * a clean slate (prevents data leakage between accounts).
  */
 function resetClientState() {
+  Object.values(state.interestDrafts).forEach((draft) => clearTimeout(draft.timer));
+  interestAutosaveEpoch += 1;
   state.profile = null;
   state.settings = null;
   state.connectors = [];
   state.sources = [];
   state.interests = [];
+  state.interestDrafts = {};
   state.interestRecommendations = [];
+  state.feedbackLearning = null;
   state.feedbackSignals = [];
   state.feedbackMode = null;
   state.recommendationCategory = "tracked";

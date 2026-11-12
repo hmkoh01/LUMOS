@@ -16,6 +16,11 @@ from src.engine.config import INTEREST_SYNONYMS, EngineConfig
 from src.engine.models import CollectionPlan, InterestGroup, Job, JobType
 
 
+# These list endpoints do not offer a topical server-side query. Fetch a
+# bounded common snapshot once and match it against all active interests.
+GLOBAL_SNAPSHOT_SOURCES = {"msit_announcements", "tourapi"}
+
+
 def normalise_keyword(keyword: str) -> str:
     """Map a keyword to its canonical form using the synonym dictionary."""
     lower = keyword.strip().lower()
@@ -117,8 +122,26 @@ def build_collection_plan(
 def plan_to_jobs(plan: CollectionPlan) -> List[Job]:
     """Convert a collection plan into concrete Job objects for the queue."""
     jobs: List[Job] = []
-    for group in plan.groups:
-        for source in plan.sources:
+    for source in plan.sources:
+        if source in GLOBAL_SNAPSHOT_SOURCES:
+            all_keywords, all_users, weight = [], set(), 0.0
+            for group in plan.groups:
+                all_keywords.extend(group.raw_keywords or [group.canonical_keyword])
+                all_users.update(group.user_ids)
+                weight += group.weight
+            if all_keywords:
+                dk = make_dedupe_key("__shared_snapshot__", source, plan.date_range_start, plan.date_range_end)
+                jobs.append(Job(
+                    job_type=JobType.COLLECT, dedupe_key=dk, priority=int(min(weight * 10, 100)),
+                    payload_json={
+                        "interest": "", "raw_keywords": list(dict.fromkeys(all_keywords)),
+                        "source": source, "user_ids": sorted(all_users),
+                        "date_start": plan.date_range_start, "date_end": plan.date_range_end,
+                        "shared_snapshot": True,
+                    },
+                ))
+            continue
+        for group in plan.groups:
             dk = make_dedupe_key(
                 group.canonical_keyword, source,
                 plan.date_range_start, plan.date_range_end,

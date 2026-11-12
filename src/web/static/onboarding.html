@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LUMOS | 관심사 설정</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20261108-onboarding-ux" />
+  </head>
+  <body class="onboarding-page-pending">
+    <main class="onboarding-page">
+      <a class="onboarding-brand" href="/" aria-label="LUMOS 홈"><img src="/static/logo.png" alt="LUMOS" /></a>
+      <section class="onboarding-page-card" aria-labelledby="onboarding-title">
+        <div class="onboarding-intro-meta">
+          <p class="eyebrow">LUMOS PERSONAL BRIEFING</p>
+        </div>
+        <h1 id="onboarding-title">어떤 소식이 궁금하세요?</h1>
+        <p class="onboarding-lead">관심사를 알려주시면 나에게 필요한 소식만 찾아드릴게요. 언제든 변경할 수 있어요.</p>
+
+        <form id="onboarding-form" novalidate>
+          <fieldset class="onboarding-section">
+            <legend>관심사 <span class="required">*</span></legend>
+            <p class="field-help">관심 있는 주제나 업무 영역을 입력해 주세요. 구체적일수록 더 잘 골라드려요.</p>
+            <div class="interest-entry">
+              <label class="sr-only" for="interest-input">관심사 직접 입력</label>
+              <input id="interest-input" autocomplete="off" aria-describedby="interest-hint interest-error" placeholder="관심사를 입력하세요" />
+              <button class="interest-add-button" id="interest-add" type="button"><span aria-hidden="true">+</span> 추가</button>
+            </div>
+            <p class="input-hint" id="interest-hint">입력 후 Enter를 누르거나 추가 버튼을 눌러 관심사를 등록하세요.</p>
+            <div class="tag-row onboarding-tags" id="interest-tags" aria-live="polite" aria-label="추가한 관심사"></div>
+            <p class="suggestion-label">추천 관심사</p>
+            <div class="suggestion-row" id="interest-suggestions" aria-label="추천 관심사">
+              <button type="button" data-interest="AI 에이전트">AI 에이전트</button>
+              <button type="button" data-interest="스타트업">스타트업</button>
+              <button type="button" data-interest="개발자 도구">개발자 도구</button>
+              <button type="button" data-interest="디자인과 UX">디자인과 UX</button>
+              <button type="button" data-interest="반도체">반도체</button>
+              <button type="button" data-interest="기후테크">기후테크</button>
+            </div>
+            <p class="form-error" id="interest-error" role="alert"></p>
+          </fieldset>
+
+          <fieldset class="onboarding-section" id="information-types-section" hidden>
+            <legend>원하는 소식 유형 <span class="optional">선택</span></legend>
+            <p class="field-help">관심사마다 받고 싶은 소식의 종류를 고르면 추천 방향을 더 정확히 맞출 수 있어요. 고르지 않아도 계속할 수 있고, 나중에 설정에서 바꿀 수 있어요.</p>
+            <div id="information-type-options" class="information-type-options" aria-live="polite"></div>
+            <button class="clarification-skip" id="clarification-skip" type="button" hidden>\uc9c0\uae08\uc740 \uac74\ub108\ub6f0\uae30</button>
+            <div id="source-availability" class="source-availability" aria-live="polite"></div>
+          </fieldset>
+
+          <fieldset class="onboarding-section" id="source-hints-section">
+            <legend>자주 보는 정보원 <span class="optional">선택</span></legend>
+            <p class="field-help">사이트, 뉴스레터, 계정 이름이나 URL을 적어둘 수 있어요. 입력만으로 자동 수집하지 않으며, 지원 여부와 이용권한을 확인한 뒤 설정에서 선호·제외 정보원으로 조절할 수 있어요.</p>
+            <label class="form-group source-hints-field">
+              <span class="sr-only">자주 보는 정보원 입력</span>
+              <textarea id="source-hints" rows="3" maxlength="600" placeholder="예: 기관 뉴스레터, https://example.com/news, @official_account"></textarea>
+            </label>
+          </fieldset>
+
+          <fieldset class="onboarding-section">
+            <legend>소식을 확인하는 목적 <span class="optional">선택</span></legend>
+            <p class="field-help">선택 사항이에요. 선택한 목적은 ‘왜 이 소식이 중요한지’를 더 구체적으로 설명하는 데만 사용합니다.</p>
+            <div class="purpose-options" id="purpose-options">
+              <label class="purpose-card">
+                <input type="checkbox" value="기술·산업 동향 파악" />
+                <span class="purpose-icon" aria-hidden="true">↗</span>
+                <span class="purpose-copy"><strong>기술·산업 동향</strong><small>변화와 흐름을 빠르게 파악해요</small></span>
+                <span class="purpose-check" aria-hidden="true">✓</span>
+              </label>
+              <label class="purpose-card">
+                <input type="checkbox" value="취업 및 역량 개발" />
+                <span class="purpose-icon" aria-hidden="true">⌁</span>
+                <span class="purpose-copy"><strong>취업·역량 개발</strong><small>다음 커리어와 배움을 준비해요</small></span>
+                <span class="purpose-check" aria-hidden="true">✓</span>
+              </label>
+              <label class="purpose-card">
+                <input type="checkbox" value="연구·학습" />
+                <span class="purpose-icon" aria-hidden="true">⌕</span>
+                <span class="purpose-copy"><strong>연구·학습</strong><small>살펴볼 주제와 자료를 발견해요</small></span>
+                <span class="purpose-check" aria-hidden="true">✓</span>
+              </label>
+              <label class="purpose-card">
+                <input type="checkbox" value="창업·사업 기회 탐색" />
+                <span class="purpose-icon" aria-hidden="true">✦</span>
+                <span class="purpose-copy"><strong>창업·사업 기회</strong><small>새로운 기회와 인사이트를 찾아요</small></span>
+                <span class="purpose-check" aria-hidden="true">✓</span>
+              </label>
+            </div>
+            <label class="form-group purpose-custom">
+              <span>기타 (직접 입력)</span>
+              <input id="purpose-custom" maxlength="120" placeholder="예: 팀의 제품 전략 검토" />
+            </label>
+          </fieldset>
+
+          <div class="onboarding-cta">
+            <p class="onboarding-note">기본으로 각 기간 최대 5개의 브리핑을 준비합니다.</p>
+            <button class="button primary full" id="onboarding-submit" type="submit" disabled>내 맞춤 브리핑 시작하기</button>
+            <p class="cta-help">관심사와 알림 설정은 나중에 언제든 변경할 수 있어요.</p>
+          </div>
+        </form>
+      </section>
+    </main>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="/static/auth.js"></script>
+    <script src="/static/onboarding.js?v=20261111-interest-clarification"></script>
+  </body>
+</html>

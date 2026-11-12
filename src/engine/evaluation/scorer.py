@@ -8,12 +8,13 @@ raw candidates over the week range.  Same for monthly.
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 
 from src.engine.config import EngineConfig
 from src.engine.evaluation.periods import period_range
 from src.engine.models import Period, RawCandidate, ScoredCandidate
+from src.context.interest_matching import matches_interest
 
 
 def _parse_date(d: Optional[str]) -> Optional[date]:
@@ -37,6 +38,35 @@ def is_within_period(published_at: Optional[str], ref_start: date, ref_end: date
     return ref_start <= pub <= ref_end
 
 
+def is_within_rolling_period(
+    published_at: Optional[str], period: str, reference_now: Optional[datetime] = None,
+) -> Optional[bool]:
+    """Check live 24-hour/7-day/30-day rolling windows in KST."""
+    if not published_at:
+        return None
+    from src.engine.evaluation.periods import KOREA_TZ
+    end = (reference_now or datetime.now(KOREA_TZ)).astimezone(KOREA_TZ)
+    days = {Period.DAILY: 1, Period.WEEKLY: 7, Period.MONTHLY: 30}.get(period)
+    if days is None:
+        raise ValueError(f"Unknown period: {period}")
+    # A date-only source timestamp has no trustworthy time-of-day.  Keep it
+    # when its date intersects the rolling window instead of pretending that
+    # midnight UTC was the actual publication time.
+    if "T" not in published_at:
+        published_date = _parse_date(published_at)
+        if published_date is None:
+            return None
+        return end.date() - timedelta(days=days) <= published_date <= end.date()
+    try:
+        published = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    # Legacy HN rows use a naïve UTC ISO timestamp.
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    return end - timedelta(days=days) <= published.astimezone(KOREA_TZ) <= end
+
+
 def _recency_score(published: Optional[str], ref_start: date, ref_end: date) -> float:
     """Higher score for items published closer to the end of the period.
 
@@ -50,6 +80,34 @@ def _recency_score(published: Optional[str], ref_start: date, ref_end: date) -> 
     span = max((ref_end - ref_start).days, 1)
     days_from_end = (ref_end - pub).days
     return max(0.0, 1.0 - (days_from_end / span) * 0.5)
+
+
+def _event_or_opportunity_eligibility(candidate: RawCandidate, reference: date) -> Optional[bool]:
+    """Apply source-type time semantics before falling back to news dates.
+
+    A forthcoming festival is useful because its real-world schedule remains
+    open, not because an article happened to be published today.  Likewise an
+    announcement with a confirmed open application window is an opportunity,
+    not automatically a fresh news event.  ``None`` delegates to the normal
+    period publication-date policy.
+    """
+    metrics = candidate.metrics or {}
+    kind = metrics.get("content_kind")
+    if kind == "culture_event":
+        status = str(metrics.get("event_status") or "")
+        if status == "ended":
+            return False
+        if status in {"upcoming", "ongoing"}:
+            return True
+        return False
+    if kind in {"government_rnd_announcement", "startup_program_announcement", "job_announcement"}:
+        status = str(metrics.get("application_window_status") or "")
+        if status in {"open", "upcoming"}:
+            end = _parse_date(metrics.get("application_end_at"))
+            return end is None or end >= reference
+        if status in {"closed", "ended"}:
+            return False
+    return None
 
 
 def _engagement_score(metrics: Dict[str, Any]) -> float:
@@ -69,11 +127,33 @@ def _interest_match_score(
         return 0.5
     title_lower = (candidate.title or "").lower()
     summary_lower = (candidate.summary or "").lower()
+    text = f"{candidate.title or ''} {candidate.summary or ''}".strip()
     matched = sum(
         1 for kw in user_interests
-        if kw.lower() in title_lower or kw.lower() in summary_lower
+        if _candidate_matches_interest(candidate, text, kw)
     )
     return min(matched / max(len(user_interests), 1), 1.0)
+
+
+def _candidate_matches_interest(candidate: RawCandidate, text: str, interest: str) -> bool:
+    """Match source text conservatively, with one research metadata synonym.
+
+    The broad LLM phrase is intentionally limited to research records.  It
+    allows an English paper titled ``Large Language Model ...`` to match a
+    reader's ``LLM research paper`` interest without turning generic AI news
+    or an unrelated title into a semantic match.
+    """
+    keyword = str(interest or "").strip()
+    if not keyword:
+        return False
+    lowered = text.casefold()
+    if keyword.casefold() in lowered or matches_interest(text, keyword):
+        return True
+    if candidate.metrics.get("content_kind") != "research_metadata":
+        return False
+    normalized_interest = keyword.casefold()
+    asks_for_llm = "llm" in normalized_interest or "large language model" in normalized_interest
+    return asks_for_llm and any(term in lowered for term in ("llm", "large language model", "generative language model"))
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +190,19 @@ def score_candidate(
     """Score a single candidate for a specific period."""
     weights = _PERIOD_WEIGHTS.get(period, _PERIOD_WEIGHTS[Period.DAILY])
 
-    recency = _recency_score(candidate.published_at, ref_start, ref_end)
+    # Source-item storage may fall back to collection time when a publisher
+    # omits a date. A Crossref record with year/month-only metadata must never
+    # gain a "new paper" boost from that fallback timestamp.
+    date_precision = candidate.metrics.get("publication_date_precision")
+    lifecycle_eligible = _event_or_opportunity_eligibility(candidate, ref_end)
+    if lifecycle_eligible is True:
+        # An active/upcoming event or a confirmed open application window is
+        # timely by its own schedule, even when its posting date is old.
+        recency = 1.0
+    elif candidate.metrics.get("content_kind") == "research_metadata" and date_precision != "day":
+        recency = 0.1
+    else:
+        recency = _recency_score(candidate.published_at, ref_start, ref_end)
     engagement = _engagement_score(candidate.metrics)
     interest = _interest_match_score(candidate, user_interests)
 
@@ -159,7 +251,19 @@ def evaluate_candidates(
     # Step 1: Eligibility filter — only candidates within the date range
     eligible = []
     for c in candidates:
-        within = is_within_period(c.published_at, ref_start, ref_end)
+        lifecycle_eligible = _event_or_opportunity_eligibility(c, ref_end)
+        if lifecycle_eligible is False:
+            continue
+        if lifecycle_eligible is True:
+            eligible.append(c)
+            continue
+        uncertain_research_date = (
+            c.metrics.get("content_kind") == "research_metadata"
+            and c.metrics.get("publication_date_precision") != "day"
+        )
+        within = (None if uncertain_research_date else (is_within_period(c.published_at, ref_start, ref_end)
+                  if reference_date is not None
+                  else is_within_rolling_period(c.published_at, period)))
         if within is None or within:
             eligible.append(c)
 

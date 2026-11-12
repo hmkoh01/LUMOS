@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.routes import router
-from src.app.lifecycle import initialize_app
+from src.app.lifecycle import initialize_app, shutdown_app
 from src.app.resource_paths import web_landing_dir, web_static_dir
 from src.app.version import APP_VERSION
 
@@ -16,7 +16,10 @@ from src.app.version import APP_VERSION
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     initialize_app()
-    yield
+    try:
+        yield
+    finally:
+        shutdown_app()
 
 
 app = FastAPI(
@@ -96,6 +99,12 @@ def health():
 @app.get("/app")
 def web_app():
     return FileResponse(WEB_STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/onboarding")
+def onboarding_page():
+    """Standalone first-run flow; client auth determines the user safely."""
+    return FileResponse(WEB_STATIC_DIR / "onboarding.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/login")

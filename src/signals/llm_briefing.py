@@ -20,6 +20,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.llm_safety import check_external_llm_allowed
+from src.sources.content_rights import item_allows_llm
 from src.signals.agent_platform import AgentPlatformConfig
 
 logger = logging.getLogger(__name__)
@@ -33,8 +34,8 @@ _PROMPT_VERSION = "v4"
 _BLOCKED_SOURCES = {"geeknews", "kisa_press", "kisa_research"}
 
 
-def _source_allowed(source: str) -> bool:
-    return source not in _BLOCKED_SOURCES
+def _source_allowed(source: str, item: Optional[Dict[str, Any]] = None) -> bool:
+    return source not in _BLOCKED_SOURCES and (item_allows_llm(item or {}) if item else True)
 
 
 # ---------------------------------------------------------------------------
@@ -236,9 +237,9 @@ def _count_errors(calls: list) -> list:
 # ---------------------------------------------------------------------------
 # LLM client wrapper
 # ---------------------------------------------------------------------------
-CONTENT_PROMPT_VERSION = "v4"
-PERSONALIZATION_PROMPT_VERSION = "v5"
-BRIEFING_VALIDATOR_VERSION = "v5"
+CONTENT_PROMPT_VERSION = "v7"
+PERSONALIZATION_PROMPT_VERSION = "v8"
+BRIEFING_VALIDATOR_VERSION = "v8"
 
 
 class BriefingLLMClient:
@@ -462,7 +463,7 @@ _PERSONALIZE_SYSTEM = """당신은 LUMOS 뉴스 브리핑 시스템의 추천 �
 - 사용자의 명시된 관심 키워드와 역할만 사용하세요. 실제 직업, 수준, 계획, 자격 등을 임의로 추정하지 마세요.
 - 먼저 원문에 명시된 기능 또는 변경점과 사용자의 구체적 워크플로 맥락을 연결하세요. "요청하신 분야의 소식입니다" 같은 일반적인 도입부로 시작하지 마세요.
 - 원문 사실: grounded_facts에 있는 주장만 사용하세요. 원문에 없는 사실을 추측하지 마세요.
-- 활용 맥락: 사용자가 검토할 수 있는 설계·운영 관점을 설명할 수 있지만, 이것은 예상되는 유용성일 뿐 입증된 결과가 아닙니다. "검토할 만합니다", "확인할 항목입니다"처럼 조건부로 표현하세요.
+- 활용 맥락: 사용자가 살필 구체적인 판단·비교 지점을 설명할 수 있지만, 이것은 예상되는 유용성일 뿐 입증된 결과가 아닙니다. 예를 들어 일정·자격·직무·지원 대상, 기능 범위·호환성·의존성, 또는 설계 선택지를 말하세요. "원문 기준으로 확인할 수 있습니다"만으로 끝내지 마세요.
 - 관련성 등급이 topic이면 인접 주제라는 점을 분명히 하고, 다른 제품 기능을 사용자의 워크플로에 적용·도입·최적화할 수 있다고 단정하지 마세요. insufficient이면 추천 이유를 만들지 마세요.
 - 성능 향상, 안정성 개선·보장, 오류 해결, 출시 효과는 원문 인용이 그 효과를 명시적으로 입증할 때만 단정적으로 쓰세요.
 - 환경·호환성·배포 상태를 알 수 없으므로 "업데이트하세요", "도입하세요", "적용하세요" 같은 직접 지시를 하지 마세요. 릴리스 노트·호환성·변경점을 확인하거나 검토하라고만 제안하세요.
@@ -489,6 +490,7 @@ _PERSONALIZE_USER_TEMPLATE = """콘텐츠 브리핑:
 추천 이유 작성 추가 규칙:
 - `recommendation_reason_ko`에는 원문의 구체적인 변경 한 가지를 먼저 적으세요. 예: 보안 수정 범주, 의존성 버전 요구 사항, 도구 등록 규칙, 인터럽트 처리 규칙.
 - 그 변경과 사용자의 관심사를 조건부로 연결하세요. 사용자의 실제 환경에 이미 적용되었거나 영향을 준다고 단정하지 마세요.
+- 사용자에게 도움이 되는 이유는 실제 판단 질문으로 쓰세요. 예: “이 기능 범위가 필요한 작업인지 비교할 때”, “지원 대상과 마감일을 판단할 때”. 원문에 효과 근거가 없으면 시간 절감·성능 향상 같은 결과를 만들지 마세요.
 - `topic` 등급에서는 다른 제품의 기능을 사용자의 워크플로에 직접 적용할 수 있다고 쓰지 말고, 검토할 변경 범위를 구체적으로 설명하세요.
 - “관련 기술 환경”, “인접 주제 관점”, “참고할 만합니다”만으로 추천 이유를 끝내지 마세요.
 
@@ -511,6 +513,38 @@ release, or an adoption recommendation unless the source explicitly says so.
 Use release/launch/public-availability wording only when the source confirms it.
 For an internal case study, prefer the meaning of \uC18C\uAC1C (technical introduction)
 over \uACF5\uAC1C or \uCD9C\uC2DC when public availability is not established.
+"""
+
+_CARD_QUALITY_ADDENDUM = """
+CARD QUALITY POLICY:
+- Output natural Korean for a reader who has not heard of the company, project, or technical term.
+- Make display_title_ko lead with the concrete event, change, deadline, result, or schedule. Do not lead with a
+  repository, package, project, or brand name. Keep such names in key_entities and source details instead.
+- Never use filler titles such as "introduction", "feature introduction", "repository introduction", "related information", or "worth referring to".
+- For display_summary_ko, answer only what changed or is available and why the source makes it relevant. Explain an
+  unfamiliar technical term briefly only when the source supports that explanation.
+- Prefer plain Korean: say what an unfamiliar term does. For example, use "previous work records" for context,
+  "turn into a video" for rendering, "tools used to build a feature" for framework, and "checking run state/errors"
+  for observability. Technical vocabulary may remain only together with that short, accurate explanation.
+- A repository-discovery source proves that a repository was found, not that a product was launched, released, or
+  materially updated. If it lacks a source-confirmed change, set is_new_event=false. Describe the concrete capability
+  stated in the repository summary first, and retain the project name only in key_entities/source details.
+- Match source type: job cards need role/eligibility/deadline facts; support-program cards need target and period;
+  research cards need publication and study-scope facts; event cards need date/place facts; finance cards need the
+  announced decision or disclosed fact. Do not invent missing fields.
+"""
+
+_PERSONALIZATION_QUALITY_ADDENDUM = """
+PERSONALIZATION QUALITY POLICY:
+- recommendation_reason_ko must state the registered interest and matching information type, then a source-specific
+  fact. It must add a profile connection rather than restating the summary.
+- Do not produce a recommendation reason from a keyword coincidence alone. If the source-specific relation is not
+  supportable, return no recommendation rather than a generic sentence.
+- State the concrete decision the reader can make with that fact (for example, compare feature scope, check eligibility
+  and deadline, or decide whether a location/schedule applies). Do not claim an outcome the source does not support.
+- Avoid repeated filler such as "introduction", "related information", "adjacent topic", "worth reviewing", and
+  "worth referring to". These phrases cannot substitute for an interest name plus a source-specific fact.
+- Do not end with "the source can be checked" or an equivalent empty sentence.
 """
 
 
@@ -542,11 +576,11 @@ def generate_content_briefing(
 ) -> Dict[str, Any]:
     """Generate user-agnostic content briefing with fact grounding."""
     source = item.get("source", "")
-    if not _source_allowed(source):
+    if not _source_allowed(source, item):
         return {
             "status": "blocked",
             "content_briefing": None,
-            "metadata": {"reason": f"Source '{source}' is under permission review"},
+            "metadata": {"reason": f"Source '{source}' lacks an eligible item-level rights decision"},
         }
 
     title = item.get("title", "").strip()
@@ -569,7 +603,8 @@ def generate_content_briefing(
     )
 
     parsed, metadata = client.generate_json(
-        _CONTENT_SYSTEM + _CONTENT_SAFETY_ADDENDUM, prompt, call_type="content", max_output_tokens=1024,
+        _CONTENT_SYSTEM + _CONTENT_SAFETY_ADDENDUM + _CARD_QUALITY_ADDENDUM,
+        prompt, call_type="content", max_output_tokens=1024,
     )
 
     if parsed is None:
@@ -589,6 +624,14 @@ def generate_content_briefing(
 
     if not validation["valid"]:
         metadata["validation_issues"] = validation["issues"]
+        # This travels only to the in-process Engine telemetry bridge.  It is
+        # deliberately a list of static validator check names, not source text
+        # or generated prose, so scheduled-run diagnostics can explain a card
+        # shortage without retaining model output.
+        metadata["validation_failed_checks"] = sorted(
+            name for name, check in validation.get("checks", {}).items()
+            if isinstance(check, dict) and check.get("pass") is False
+        )
         return {"status": "validation_failed", "content_briefing": None, "metadata": metadata}
     if use_cache:
         _content_cache[_cache_key(title, summary, client._model)] = parsed
@@ -626,17 +669,29 @@ def generate_personalized_reason(
     prompt += _personalization_anchor_contract(content_briefing, relevance)
 
     parsed, metadata = client.generate_json(
-        _PERSONALIZE_SYSTEM, prompt, call_type="personalize", max_output_tokens=768,
+        _PERSONALIZE_SYSTEM + _PERSONALIZATION_QUALITY_ADDENDUM,
+        prompt, call_type="personalize", max_output_tokens=768,
     )
 
     if parsed is None:
         return {"status": "failed", "personalization": None, "metadata": metadata}
 
     from src.signals.llm_briefing_validator import validate_personalization
-    validation = validate_personalization(parsed, content_briefing)
+    # Every published reason must name the actual profile interest.  A topic
+    # match may still be useful, but only when it can state a concrete,
+    # source-grounded relationship instead of filling the slot with a vague
+    # "adjacent topic" sentence.
+    validation = validate_personalization(
+        parsed, content_briefing,
+        registered_interests=keywords,
+    )
     parsed["_validation"] = validation
     if not validation["valid"]:
         metadata["validation_issues"] = validation["issues"]
+        metadata["validation_failed_checks"] = sorted(
+            name for name, check in validation.get("checks", {}).items()
+            if isinstance(check, dict) and check.get("pass") is False
+        )
         return {"status": "validation_failed", "personalization": None, "metadata": metadata}
     return {"status": "success", "personalization": parsed, "metadata": metadata}
 

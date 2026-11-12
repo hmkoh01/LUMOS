@@ -6,42 +6,47 @@ minimum threshold filtering, ranking.
 
 import os
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 
 os.environ["LUMOS_TEST_MODE"] = "true"
 
 from src.engine.config import EngineConfig
 from src.engine.evaluation.periods import period_range
-from src.engine.evaluation.scorer import evaluate_candidates, score_candidate
+from src.engine.evaluation.scorer import evaluate_candidates, is_within_rolling_period, score_candidate
 from src.engine.models import Period, RawCandidate
 
 
 class TestPeriodRange(unittest.TestCase):
+    def test_live_daily_window_keeps_last_night_item_after_kst_midnight(self):
+        now = datetime(2026, 11, 8, 2, 5, tzinfo=timezone.utc)
+        self.assertTrue(is_within_rolling_period("2026-11-07T17:02:59Z", Period.DAILY, now))
+        self.assertFalse(is_within_rolling_period("2026-11-06T17:02:59Z", Period.DAILY, now))
+
     def test_daily(self):
         start, end = period_range(Period.DAILY, date(2026, 10, 16))
         self.assertEqual(start, date(2026, 10, 16))
         self.assertEqual(end, date(2026, 10, 16))
 
     def test_weekly(self):
-        # Oct 16 2026 is a Friday
+        # Trailing seven dates, including the reference date.
         start, end = period_range(Period.WEEKLY, date(2026, 10, 16))
-        self.assertEqual(start, date(2026, 10, 12))  # Monday
-        self.assertEqual(end, date(2026, 10, 18))  # Sunday
+        self.assertEqual(start, date(2026, 10, 10))
+        self.assertEqual(end, date(2026, 10, 16))
 
     def test_monthly(self):
         start, end = period_range(Period.MONTHLY, date(2026, 10, 16))
-        self.assertEqual(start, date(2026, 10, 1))
-        self.assertEqual(end, date(2026, 10, 31))
+        self.assertEqual(start, date(2026, 9, 17))
+        self.assertEqual(end, date(2026, 10, 16))
 
     def test_monthly_feb(self):
         start, end = period_range(Period.MONTHLY, date(2026, 2, 15))
-        self.assertEqual(start, date(2026, 2, 1))
-        self.assertEqual(end, date(2026, 2, 28))
+        self.assertEqual(start, date(2026, 1, 17))
+        self.assertEqual(end, date(2026, 2, 15))
 
     def test_monthly_december(self):
         start, end = period_range(Period.MONTHLY, date(2026, 12, 25))
-        self.assertEqual(start, date(2026, 12, 1))
-        self.assertEqual(end, date(2026, 12, 31))
+        self.assertEqual(start, date(2026, 11, 26))
+        self.assertEqual(end, date(2026, 12, 25))
 
 
 class TestScoreCandidate(unittest.TestCase):
@@ -85,6 +90,17 @@ class TestScoreCandidate(unittest.TestCase):
         c = self._make_candidate(title="New Rust compiler update")
         sc = score_candidate(c, Period.DAILY, date(2026, 10, 16), date(2026, 10, 16), ["Rust", "compiler"])
         self.assertGreater(sc.score_breakdown["interest_match"], 0)
+
+    def test_imprecise_crossref_date_is_scored_conservatively(self):
+        c = RawCandidate(
+            dedupe_key="year-only", source="crossref", title="AI paper", summary="",
+            # Storage may supply this fallback, but the source metadata says
+            # its real publication date had only a year.
+            published_at="2026-10-16T00:00:00+00:00",
+            metrics={"content_kind": "research_metadata", "publication_date_precision": "year"},
+        )
+        sc = score_candidate(c, Period.DAILY, date(2026, 10, 16), date(2026, 10, 16), ["AI"])
+        self.assertEqual(sc.score_breakdown["recency"], 0.1)
 
     def test_periods_are_independent(self):
         """Each period should produce different candidate sets and rankings."""

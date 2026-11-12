@@ -4,24 +4,15 @@ from src.context.keyword_extraction import extract_keywords
 from src.storage.sqlite_store import DEFAULT_LOCAL_USER_ID, SQLiteStore
 
 
-FEEDBACK_DELTAS = {
-    "tracked": 1.0,
-    "ignored": -0.5,
-}
-
-
 def keywords_from_signal(signal: Dict[str, Any], max_keywords: int = 8) -> List[Dict[str, Any]]:
+    """Legacy diagnostic helper; it does not persist or learn from text."""
     source_items = signal.get("source_items_json") or []
     source_titles = " ".join(str(item.get("title", "")) for item in source_items)
     text = " ".join(
-        str(v) for v in [
-            signal.get("title"),
-            signal.get("summary"),
-            signal.get("why_it_matters"),
-            signal.get("category"),
-            signal.get("source_name"),
-            source_titles,
-        ] if v
+        str(value) for value in (
+            signal.get("title"), signal.get("summary"), signal.get("why_it_matters"),
+            signal.get("category"), signal.get("source_name"), source_titles,
+        ) if value
     )
     return extract_keywords(text, max_keywords=max_keywords)
 
@@ -34,33 +25,11 @@ def apply_feedback_learning(
     multiplier: float = 1.0,
     user_id: int = DEFAULT_LOCAL_USER_ID,
 ) -> List[str]:
-    if event_type not in FEEDBACK_DELTAS or signal_id <= 0:
-        return []
-    signal = store.get_signal(signal_id, user_id=user_id)
-    if not signal:
-        return []
-    delta = FEEDBACK_DELTAS[event_type] * multiplier
-    updated = []
-    evidence = {
-        "event_type": event_type,
-        "signal_id": signal_id,
-        "category": signal.get("category"),
-        "payload": payload or {},
-    }
-    keyword_scores = {
-        str(item.get("keyword", "")).strip().casefold(): float(item.get("score", 1.0))
-        for item in keywords_from_signal(signal)
-        if str(item.get("keyword", "")).strip()
-    }
-    for value in (signal.get("category"), signal.get("source_name")):
-        if value:
-            keyword_scores.setdefault(str(value).strip().casefold(), 1.0)
+    """Compatibility no-op while Stage 3 collects structured evidence.
 
-    for interest in store.get_interests(status="active", limit=None, user_id=user_id):
-        score = keyword_scores.get(str(interest.get("keyword", "")).casefold())
-        if score is None:
-            continue
-        next_weight = max(0.1, min(10.0, float(interest.get("weight") or 1.0) + delta * score))
-        store.update_interest(interest["keyword"], weight=next_weight, user_id=user_id)
-        updated.append(interest["keyword"])
-    return updated
+    Explicit interests are user-owned.  Earlier versions adjusted their
+    weights directly from one card reaction; that made a single accidental
+    tap alter routing.  The feedback-preference detail store now retains
+    evidence for a later, separately approved ranker instead.
+    """
+    return []

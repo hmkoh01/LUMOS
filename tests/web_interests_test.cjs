@@ -1,7 +1,10 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const context = vm.createContext({ document: { addEventListener() {} } });
+const context = vm.createContext({
+  document: { addEventListener() {} },
+  window: { addEventListener() {} },
+});
 vm.runInContext(fs.readFileSync('src/web/static/app.js', 'utf8'), context);
 for (const completed of [true, false]) {
   vm.runInContext(`state.settings = {onboarding_completed: ${completed}}; state.profile = null; state.interests = []; state.signals = []; detectFirstRun();`, context);

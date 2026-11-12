@@ -23,6 +23,33 @@ class CollectionConfig:
     max_source_retries: int = 3
     rate_limit_delay_seconds: float = 1.0
     rate_limit_429_backoff_seconds: float = 30.0
+    # OpenAlex has a free daily allowance, but LUMOS never permits a worker
+    # to spill into paid usage. This is a global persisted request cap.
+    openalex_max_requests_per_day: int = 10
+    # Domestic sources remain disabled until an operator sets these explicit
+    # per-source caps after production approval.  Zero is a hard stop.
+    tourapi_max_requests_per_day: int = 0
+    opendart_max_requests_per_day: int = 0
+    # A company-code directory must be refreshed by a separately authorised
+    # shared job; stale mappings block company disclosure collection.
+    opendart_corporation_cache_max_age_hours: int = 168
+    # Empty means OpenDART cannot run as a user-scoped Pilot. An operator must
+    # name the small Pilot cohort explicitly; this does not affect the
+    # pre-existing GitHub/HN pilot sources.
+    opendart_pilot_user_ids: tuple[int, ...] = ()
+    # Discovery is opt-in. The default provider is disabled and never performs
+    # web searches; this flag only permits aggregated backlog maintenance.
+    source_discovery_enabled: bool = False
+    source_discovery_window_days: int = 7
+    source_discovery_max_requests_per_day: int = 0
+    # A reviewed static official directory is distinct from a general web
+    # search provider.  It is opt-in because even metadata-only discovery
+    # writes operational backlog rows.
+    source_discovery_official_directory_enabled: bool = False
+    # Real collection starts only when explicitly enabled.  New deployments
+    # begin with a small allowlist until call volume is reviewed.
+    pilot_sources: tuple[str, ...] = ("hackernews", "github")
+    schedule_slots_kst: tuple[str, ...] = ("06:30", "18:30")
 
 
 @dataclass(frozen=True)
@@ -96,6 +123,26 @@ class EngineConfig:
             external_calls_allowed=os.environ.get("LUMOS_EXTERNAL_CALLS", "false").lower() == "true",
             collection=CollectionConfig(
                 scheduler_enabled=os.environ.get("LUMOS_SCHEDULER_ENABLED", "false").lower() == "true",
+                pilot_sources=tuple(part.strip() for part in os.environ.get(
+                    "LUMOS_ENGINE_PILOT_SOURCES", "hackernews,github"
+                ).split(",") if part.strip()),
+                schedule_slots_kst=tuple(part.strip() for part in os.environ.get(
+                    "LUMOS_ENGINE_SCHEDULE_SLOTS_KST", "06:30,18:30"
+                ).split(",") if part.strip()),
+                openalex_max_requests_per_day=max(0, int(os.environ.get("LUMOS_OPENALEX_MAX_REQUESTS_PER_DAY", "10"))),
+                tourapi_max_requests_per_day=max(0, int(os.environ.get("LUMOS_TOURAPI_MAX_REQUESTS_PER_DAY", "0"))),
+                opendart_max_requests_per_day=max(0, int(os.environ.get("LUMOS_OPENDART_MAX_REQUESTS_PER_DAY", "0"))),
+                opendart_corporation_cache_max_age_hours=max(1, int(os.environ.get("LUMOS_OPENDART_CORPORATION_CACHE_MAX_AGE_HOURS", "168"))),
+                opendart_pilot_user_ids=tuple(
+                    int(value.strip()) for value in os.environ.get("LUMOS_OPENDART_PILOT_USER_IDS", "").split(",")
+                    if value.strip().isdigit() and int(value.strip()) > 0
+                ),
+                source_discovery_enabled=os.environ.get("LUMOS_SOURCE_DISCOVERY_ENABLED", "false").lower() == "true",
+                source_discovery_window_days=max(1, int(os.environ.get("LUMOS_SOURCE_DISCOVERY_WINDOW_DAYS", "7"))),
+                source_discovery_max_requests_per_day=max(0, int(os.environ.get("LUMOS_SOURCE_DISCOVERY_MAX_REQUESTS_PER_DAY", "0"))),
+                source_discovery_official_directory_enabled=os.environ.get(
+                    "LUMOS_SOURCE_DISCOVERY_OFFICIAL_DIRECTORY_ENABLED", "false"
+                ).lower() == "true",
             ),
             llm=LLMConfig(
                 provider=os.environ.get("LUMOS_ENGINE_LLM_PROVIDER", "mock").lower(),

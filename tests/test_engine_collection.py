@@ -147,6 +147,30 @@ class TestPlanToJobs(unittest.TestCase):
         keys = [j.dedupe_key for j in jobs]
         self.assertEqual(len(keys), len(set(keys)), "Dedupe keys must be unique")
 
+    def test_msit_uses_one_shared_snapshot_for_multiple_interests(self):
+        config = EngineConfig()
+        interests = [
+            {"user_id": 1, "keyword": "government R&D", "weight": 5.0},
+            {"user_id": 2, "keyword": "international research", "weight": 3.0},
+        ]
+        plan = build_collection_plan(interests, ["msit_announcements"], {1, 2}, "2026-11-08", "2026-11-08", config)
+        jobs = plan_to_jobs(plan)
+        self.assertEqual(len(jobs), 1)
+        self.assertTrue(jobs[0].payload_json["shared_snapshot"])
+        self.assertEqual(set(jobs[0].payload_json["raw_keywords"]), {"government R&D", "international research"})
+
+    def test_tourapi_uses_one_shared_snapshot_for_multiple_local_interests(self):
+        config = EngineConfig()
+        interests = [
+            {"user_id": 1, "keyword": "Seoul cultural event", "weight": 5.0},
+            {"user_id": 2, "keyword": "Busan festival", "weight": 3.0},
+        ]
+        plan = build_collection_plan(interests, ["tourapi"], {1, 2}, "2026-11-09", "2026-11-09", config)
+        jobs = plan_to_jobs(plan)
+        self.assertEqual(len(jobs), 1)
+        self.assertTrue(jobs[0].payload_json["shared_snapshot"])
+        self.assertEqual(set(jobs[0].payload_json["raw_keywords"]), {"Seoul cultural event", "Busan festival"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -85,14 +85,18 @@ def _seed_signals(store, n=5, user_id=1):
 def _seed_reserves(store, run_id, n=3, user_id=1, start_rank=100):
     """Insert reserve candidates into signal_reserves."""
     import json
+    from datetime import date
     with store.connect() as conn:
         for i in range(n):
             candidate = {
-                "source_name": "mock",
-                "source_url": f"https://example.com/reserve-{i}",
-                "title": f"Reserve {i}",
-                "summary": f"Reserve summary {i}",
-                "dedupe_key": f"reserve-{i}",
+                "_engine_signal": {
+                    "signal_date": date.today().isoformat(), "title": f"Reserve {i}",
+                    "summary": f"Reserve summary {i}", "why_it_matters": "Verified reserve",
+                    "category": "engine-v2", "recommended_action": "Read", "source_name": "mock",
+                    "source_url": f"https://example.com/reserve-{i}", "source_items_json": [],
+                    "metadata_json": {"briefing_provider": "engine-v2-structured", "engine_period": "daily", "display_title_ko": f"Reserve {i}"},
+                    "confidence": 0.5, "rank": start_rank + i, "status": "active",
+                },
             }
             conn.execute(
                 "INSERT INTO signal_reserves (pipeline_run_id, rank, candidate_json) VALUES (?, ?, ?)",

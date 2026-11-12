@@ -24,6 +24,15 @@ class QueueStore(ABC):
         """
 
     @abstractmethod
+    def enqueue_once(self, job: Job) -> Job:
+        """Insert only once for a durable calendar/job dedupe key.
+
+        Completed jobs also suppress a duplicate.  Scheduled work uses this
+        variant so restarts and concurrent service instances cannot replay a
+        completed collection slot.
+        """
+
+    @abstractmethod
     def claim(self, worker_id: str, lease_seconds: int = 300) -> Optional[Job]:
         """Atomically claim the highest-priority pending job.
 
@@ -41,6 +50,10 @@ class QueueStore(ABC):
 
         If retry_count < max_retries the job is re-queued as pending.
         """
+
+    @abstractmethod
+    def defer(self, job_id: int, delay_seconds: float, reason: str = "") -> None:
+        """Return a running dependency job to the queue until it is eligible."""
 
     @abstractmethod
     def cancel(self, job_id: int) -> None:
@@ -65,6 +78,23 @@ class QueueStore(ABC):
     @abstractmethod
     def find_duplicate(self, dedupe_key: str) -> Optional[Job]:
         """Find an active (pending/running) job with the same dedupe key."""
+
+    @abstractmethod
+    def get_job_by_dedupe_key(self, dedupe_key: str) -> Optional[Job]:
+        """Return the latest durable job for a calendar dedupe key, if any."""
+
+    @abstractmethod
+    def reserve_source_request(self, source_id: str, request_day: str, max_requests: int) -> bool:
+        """Atomically reserve one source request from its global daily cap.
+
+        The reservation is shared by every worker using the same queue store.
+        A failed upstream call still consumes the slot so retry loops cannot
+        bypass a no-cost operating ceiling.
+        """
+
+    @abstractmethod
+    def get_source_request_usage(self, source_id: str, request_day: str) -> int:
+        """Return the persisted number of reserved requests for a source/day."""
 
     @abstractmethod
     def list_jobs(

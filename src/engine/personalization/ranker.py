@@ -71,6 +71,7 @@ def personalise_rankings(
     *,
     display_limit: int = 5,
     validated_card_fields: Optional[Dict[str, Dict[str, str]]] = None,
+    require_validated_personalization: bool = False,
 ) -> List[Dict[str, Any]]:
     """Produce the final ranked list for a single user.
 
@@ -106,8 +107,25 @@ def personalise_rankings(
 
     assessed.sort(key=lambda item: item[0].importance_score, reverse=True)
 
+    # Keep one genuinely competitive source alternative visible before the
+    # highest-volume source consumes every card.  The handler has already
+    # applied the quality threshold, so this only rearranges qualified items.
+    if display_limit > 1:
+        best_by_source = {}
+        top_score = assessed[0][0].importance_score if assessed else 0.0
+        for entry in assessed:
+            source = entry[0].candidate.source or "unknown"
+            if source not in best_by_source and entry[0].importance_score >= max(0.1, top_score * 0.25):
+                best_by_source[source] = entry
+        if len(best_by_source) > 1:
+            seeds = sorted(best_by_source.values(), key=lambda entry: entry[0].importance_score, reverse=True)
+            seed_keys = {entry[0].candidate.dedupe_key for entry in seeds}
+            assessed = seeds + [entry for entry in assessed if entry[0].candidate.dedupe_key not in seed_keys]
+
     result: List[Dict[str, Any]] = []
-    for i, (sc, relevance) in enumerate(assessed[:display_limit]):
+    for sc, relevance in assessed:
+        if len(result) >= display_limit:
+            break
         briefing = briefings.get(sc.candidate.dedupe_key)
         supplied = (validated_card_fields or {}).get(sc.candidate.dedupe_key, {})
         # Per-user fields must already be validated for this profile.  Do not
@@ -116,9 +134,15 @@ def personalise_rankings(
             reason = supplied["recommendation_reason_ko"]
         else:
             supplied = {}
+            if require_validated_personalization:
+                # General user-facing cards must never revive the historical
+                # adjacent-topic template just to fill a slot.  The Engine
+                # service passes this flag; legacy offline ranking callers can
+                # still explicitly exercise their compatibility fallback.
+                continue
             reason = _build_reason(sc.candidate, user_interests, briefing, relevance.level)
         card = {
-            "rank": i + 1,
+            "rank": len(result) + 1,
             "dedupe_key": sc.candidate.dedupe_key,
             "candidate": sc.candidate,
             "scored": sc,

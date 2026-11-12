@@ -91,22 +91,22 @@ class TestPeriodEligibility(unittest.TestCase):
         eod = "2026-10-16T23:59:59+09:00"
         self.assertTrue(is_within_period(eod, ref, ref))
 
-    def test_weekly_boundary_monday(self):
+    def test_weekly_boundary_trailing_seven_days(self):
         start, end = period_range(Period.WEEKLY, date(2026, 10, 16))
-        self.assertTrue(is_within_period("2026-10-12T00:00:00+09:00", start, end))  # Monday
-        self.assertFalse(is_within_period("2026-10-11T23:59:59+09:00", start, end))  # Sunday before
+        self.assertTrue(is_within_period("2026-10-10T00:00:00+09:00", start, end))
+        self.assertFalse(is_within_period("2026-10-09T23:59:59+09:00", start, end))
 
-    def test_weekly_boundary_sunday(self):
+    def test_weekly_boundary_excludes_future_date(self):
         start, end = period_range(Period.WEEKLY, date(2026, 10, 16))
-        self.assertTrue(is_within_period("2026-10-18T23:59:59+09:00", start, end))  # Sunday
-        self.assertFalse(is_within_period("2026-10-19T00:00:00+09:00", start, end))  # Monday after
+        self.assertTrue(is_within_period("2026-10-16T23:59:59+09:00", start, end))
+        self.assertFalse(is_within_period("2026-10-17T00:00:00+09:00", start, end))
 
-    def test_monthly_boundary_first_last(self):
+    def test_monthly_boundary_trailing_thirty_days(self):
         start, end = period_range(Period.MONTHLY, date(2026, 10, 16))
-        self.assertTrue(is_within_period("2026-10-01T00:00:00+09:00", start, end))
-        self.assertTrue(is_within_period("2026-10-31T23:59:59+09:00", start, end))
-        self.assertFalse(is_within_period("2026-09-30T23:59:59+09:00", start, end))
-        self.assertFalse(is_within_period("2026-11-01T00:00:00+09:00", start, end))
+        self.assertTrue(is_within_period("2026-09-17T00:00:00+09:00", start, end))
+        self.assertTrue(is_within_period("2026-10-16T23:59:59+09:00", start, end))
+        self.assertFalse(is_within_period("2026-09-16T23:59:59+09:00", start, end))
+        self.assertFalse(is_within_period("2026-10-17T00:00:00+09:00", start, end))
 
     def test_unknown_date_eligible(self):
         """Candidates with no published_at are eligible (cannot prove ineligible)."""
@@ -917,7 +917,14 @@ class TestCollectorAdapter(unittest.TestCase):
         # These are all the sources that have real collectors
         expected = {"mock", "hackernews", "github", "youtube",
                     "rss", "official_ai_blogs", "company_newsroom",
-                    "geeknews", "kisa_press", "kisa_research"}
+                    "geeknews", "kisa_press", "kisa_research",
+                    "crossref", "openalex", "mss_bizinfo", "msit_announcements",
+                    "msit_business_rss", "msit_recruitment_rss", "tourapi",
+                    # Implemented means a Collector class is available; it
+                    # does not grant Registry permission or enable collection.
+                    "mss_support_program", "public_institution_jobs",
+                    "public_service_jobs", "youthcenter_policy", "seoul_culture_events",
+                    "employment24", "opendart", "kopis"}
         self.assertEqual(IMPLEMENTED_SOURCES, expected)
 
 

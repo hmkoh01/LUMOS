@@ -20,9 +20,9 @@ def today_kst() -> date:
 def period_range(period: str, reference: Optional[date] = None) -> Tuple[date, date]:
     """Return inclusive (start, end) date pair for the given period.
 
-    Daily: today only.
-    Weekly: Monday..Sunday containing ``reference``.
-    Monthly: 1st..last day of month containing ``reference``.
+    Daily: the current KST date (the collector supplies timestamped items).
+    Weekly: the trailing seven KST calendar dates including ``reference``.
+    Monthly: the trailing thirty KST calendar dates including ``reference``.
     """
     ref = reference or today_kst()
 
@@ -30,18 +30,10 @@ def period_range(period: str, reference: Optional[date] = None) -> Tuple[date, d
         return ref, ref
 
     if period == Period.WEEKLY:
-        start = ref - timedelta(days=ref.weekday())  # Monday
-        end = start + timedelta(days=6)  # Sunday
-        return start, end
+        return ref - timedelta(days=6), ref
 
     if period == Period.MONTHLY:
-        start = ref.replace(day=1)
-        # Last day of month
-        if ref.month == 12:
-            end = ref.replace(year=ref.year + 1, month=1, day=1) - timedelta(days=1)
-        else:
-            end = ref.replace(month=ref.month + 1, day=1) - timedelta(days=1)
-        return start, end
+        return ref - timedelta(days=29), ref
 
     raise ValueError(f"Unknown period: {period}")
 

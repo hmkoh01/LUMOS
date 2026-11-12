@@ -217,6 +217,42 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS feedback_preference_details (
+        user_id INTEGER NOT NULL,
+        signal_id INTEGER NOT NULL,
+        preference TEXT NOT NULL CHECK (preference IN ('tracked', 'ignored')),
+        reason_code TEXT NOT NULL,
+        related_interests_json TEXT NOT NULL DEFAULT '[]',
+        information_type_ids_json TEXT NOT NULL DEFAULT '[]',
+        topic_tags_json TEXT NOT NULL DEFAULT '[]',
+        difficulty TEXT NOT NULL DEFAULT 'unknown',
+        content_type TEXT NOT NULL DEFAULT 'unknown',
+        evaluated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, signal_id),
+        FOREIGN KEY (signal_id) REFERENCES signals(id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS feedback_learning_settings (
+        user_id INTEGER PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        reset_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS feedback_learning_rule_resets (
+        user_id INTEGER NOT NULL,
+        feature TEXT NOT NULL,
+        value TEXT NOT NULL,
+        reset_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, feature, value),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS signal_preferences (
         user_id INTEGER NOT NULL,
         signal_id INTEGER NOT NULL,
@@ -242,6 +278,8 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_interest_graph_keyword ON interest_graph(keyword)",
     "CREATE INDEX IF NOT EXISTS idx_signals_date_rank ON signals(signal_date, rank)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_events_signal ON feedback_events(signal_id)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_preference_details_user_preference ON feedback_preference_details(user_id, preference, updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_learning_rule_resets_user ON feedback_learning_rule_resets(user_id, reset_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_signal_preferences_saved ON signal_preferences(user_id, saved, saved_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_signal_preferences_recommendation ON signal_preferences(user_id, recommendation_preference, preference_updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_context_items_user_dedupe ON context_items(user_id, dedupe_key)",
@@ -252,6 +290,13 @@ SCHEMA_STATEMENTS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_candidates_dedupe ON signal_candidates(dedupe_key)",
     "CREATE INDEX IF NOT EXISTS idx_signals_dedupe ON signals(signal_date, dedupe_key)",
     "CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started ON pipeline_runs(started_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS user_activity (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_user_activity_seen ON user_activity(last_seen_at DESC)",
     # ── Assistant: conversations & messages ──────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS conversations (

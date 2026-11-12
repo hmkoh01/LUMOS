@@ -14,8 +14,8 @@ class SignalPreferencesTest(unittest.TestCase):
         self.store = SQLiteStore(Path(self.tmp.name) / "preferences.db")
         self.store.add_manual_interest("agent")
         self.signal_id = self.store.create_signal({
-            "title": "agent update", "summary": "agent", "why_it_matters": "agent",
-            "source_name": "GitHub", "source_url": "https://example.test/agent", "status": "active",
+            "title": "에이전트 업데이트", "summary": "에이전트 오프라인 검증", "why_it_matters": "오프라인 검증",
+            "source_name": "검증 출처", "source_url": "https://example.test/agent", "status": "active",
         })
         self.service = FeedbackService(self.store)
 
@@ -29,12 +29,12 @@ class SignalPreferencesTest(unittest.TestCase):
         self.service.set_recommendation_preference(self.signal_id, None)
         self.assertIsNone(self.store.get_signal_preference_state(self.signal_id)["recommendation_preference"])
 
-    def test_repeated_selection_does_not_reapply_learning(self):
+    def test_repeated_selection_does_not_modify_explicit_interest_weight(self):
         before = self.store.get_interests()[0]["weight"]
         self.service.set_recommendation_preference(self.signal_id, "tracked")
         once = self.store.get_interests()[0]["weight"]
         self.service.set_recommendation_preference(self.signal_id, "tracked")
-        self.assertGreater(once, before)
+        self.assertEqual(once, before)
         self.assertEqual(self.store.get_interests()[0]["weight"], once)
         self.service.set_recommendation_preference(self.signal_id, None)
         self.assertEqual(self.store.get_interests()[0]["weight"], before)

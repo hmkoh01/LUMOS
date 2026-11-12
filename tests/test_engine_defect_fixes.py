@@ -80,17 +80,14 @@ def _seed_full_pipeline(store, n_primary=3, n_reserve=5, user_id=1):
         # Insert reserve candidates
         for i in range(n_reserve):
             candidate = {
-                "source_name": "mock",
-                "source": "mock",
-                "source_url": f"https://example.com/reserve-{i}",
-                "url": f"https://example.com/reserve-{i}",
-                "title": f"Reserve Signal {i}",
-                "summary": f"Reserve summary {i}",
-                "why_it_matters": "",
-                "category": "AI_LLM_AGENT",
-                "dedupe_key": f"reserve-{i}",
-                "route_category": "AI_LLM_AGENT",
-                "matched_keywords_json": ["AI"],
+                "_engine_signal": {
+                    "signal_date": date.today().isoformat(), "title": f"Reserve Signal {i}",
+                    "summary": f"Reserve summary {i}", "why_it_matters": "Verified reserve",
+                    "category": "engine-v2", "recommended_action": "Read", "source_name": "mock",
+                    "source_url": f"https://example.com/reserve-{i}", "source_items_json": [],
+                    "metadata_json": {"briefing_provider": "engine-v2-structured", "engine_period": "daily", "display_title_ko": f"Reserve Signal {i}"},
+                    "confidence": 0.5, "rank": n_primary + 1 + i, "status": "active",
+                },
             }
             conn.execute(
                 "INSERT INTO signal_reserves (pipeline_run_id, rank, candidate_json) "
@@ -295,7 +292,12 @@ class TestReserveBackfillEndToEnd(unittest.TestCase):
         # All reserves belong to this run (period-scoped by pipeline_run_id)
         for rank, candidate in reserves:
             self.assertIsInstance(candidate, dict)
-            self.assertIn("title", candidate)
+            # Engine v2 reserves deliberately retain the validated signal
+            # wrapper.  ``_try_backfill_one`` unwraps this exact contract and
+            # therefore never needs a fresh generator/LLM call on dismiss.
+            self.assertIn("_engine_signal", candidate)
+            self.assertIn("title", candidate["_engine_signal"])
+            self.assertEqual(candidate["_engine_signal"]["metadata_json"]["engine_period"], "daily")
 
     def test_no_id_collision_between_primary_and_reserve(self):
         """Primary signal IDs and reserve-revealed signal IDs don't collide."""
@@ -370,14 +372,17 @@ class TestFrontendRaceConditions(unittest.TestCase):
 
     def test_double_dismiss_same_card(self):
         """Dismissing the same card twice — second call is idempotent."""
-        ids, _, _ = _seed_full_pipeline(self.store, n_primary=3, n_reserve=3)
+        ids, run_id, _ = _seed_full_pipeline(self.store, n_primary=3, n_reserve=3)
 
         r1 = dismiss_signal(DismissRequest(signal_id=ids[0]), self.store, self.user, _enabled_config())
         self.assertTrue(r1["success"])
+        self.assertIsNotNone(r1["replacement"])
 
         # Second dismiss on same card — preference already set, should not crash
         r2 = dismiss_signal(DismissRequest(signal_id=ids[0]), self.store, self.user, _enabled_config())
         self.assertTrue(r2["success"])
+        self.assertIsNone(r2["replacement"])
+        self.assertEqual(len(self.store.get_signal_reserves(run_id, limit=10, user_id=self.user.id)), 2)
 
     def test_dismiss_then_immediate_undo(self):
         """Dismiss followed immediately by undo — clean round-trip."""

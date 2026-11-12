@@ -57,6 +57,7 @@ def get_current_user(
         row on first login. Missing or invalid tokens return HTTP 401.
     """
     if verifier is None:
+        store.touch_user_activity(DEFAULT_LOCAL_USER_ID)
         return CurrentUser(id=DEFAULT_LOCAL_USER_ID)
 
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -73,4 +74,5 @@ def get_current_user(
         external_id=claims.sub,
         display_name=claims.email or "",
     )
+    store.touch_user_activity(internal_id)
     return CurrentUser(id=internal_id)

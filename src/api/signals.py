@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.api.dependencies import CurrentUser, get_current_user, get_store
-from src.api.models import RecommendationPreferenceUpdate, SavedSignalUpdate
+from src.api.models import RecommendationPreferenceUpdate, RecommendationReasonUpdate, SavedSignalUpdate
+from src.engine.config import EngineConfig
+from src.engine.collection.source_support import collection_support, first_briefing_candidate_state
 from src.api.pipeline import generate_signals_from_mock_pipeline
 from src.signals.feedback import FeedbackService
 from src.signals.mock_generator import MockSignalGenerator
@@ -12,6 +14,43 @@ from src.storage.sqlite_store import SQLiteStore
 from src.signals.generator import SignalGenerator
 
 router = APIRouter(tags=["signals"])
+
+
+def _first_briefing_state(store: SQLiteStore, user_id: int, config: EngineConfig,
+                          engine_period: str, signal_count: int) -> str:
+    """Explain an empty Engine feed without treating it as a generic failure.
+
+    This is read-only.  It never schedules collection or expands the user's
+    enabled sources; in particular an OpenDART Pilot remains scoped to its
+    explicitly configured user.
+    """
+    if signal_count:
+        return "candidates_available"
+    profile = store.get_profile(user_id=user_id) or {}
+    configs = store.get_source_configs(user_id=user_id)
+    interests = [
+        row.get("keyword", "") for row in store.get_interests(limit=50, user_id=user_id)
+        if row.get("status") == "active"
+    ]
+    supports = [
+        collection_support(keyword, config.collection.pilot_sources, configs, profile=profile)
+        for keyword in interests if str(keyword).strip()
+    ]
+    # Do not report a temporary empty source pool as an operational source
+    # outage.  Conversely, an empty or unsupported profile cannot truthfully
+    # be shown as merely waiting for collection.
+    if not supports or not any(support.get("status") == "supported" for support in supports):
+        return "no_operational_source"
+    completed = None
+    for run in store.get_recent_pipeline_runs(limit=100, user_id=user_id):
+        summary = run.get("summary_json") or {}
+        if summary.get("period") == engine_period:
+            completed = run
+            break
+    if completed and completed.get("status") == "completed":
+        count = int((completed.get("summary_json") or {}).get("card_count", 0))
+        return first_briefing_candidate_state({"status": "supported"}, count, collection_observed=True)
+    return first_briefing_candidate_state({"status": "supported"})
 
 
 class GenerateSignalsRequest(BaseModel):
@@ -29,10 +68,28 @@ def get_signals_for_period(
     store: SQLiteStore = Depends(get_store),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    signals = store.get_signals_for_period(period, user_id=current_user.id)
+    config = EngineConfig.from_env()
+    requested_limit = int(store.get_settings(user_id=current_user.id).get("signal_count", 3))
+    display_limit = min(max(1, requested_limit), config.budget.max_briefing_display_count)
+    if config.enabled:
+        signals = store.get_engine_signals_for_period(period, limit=display_limit, user_id=current_user.id)
+    else:
+        # Preserve the legacy path while still respecting the user's setting.
+        signals = store.get_signals_for_period(period, user_id=current_user.id)[:display_limit]
     # Reserve pagination is only meaningful for the active daily pipeline run.
-    expansion = store.signal_expansion_status(user_id=current_user.id) if period == "today" else {"pipeline_run_id": None, "has_more": False}
-    return {"success": True, "period": period, "signals": signals, **expansion}
+    engine_period = {"today": "daily", "week": "weekly", "month": "monthly"}[period]
+    expansion = store.signal_expansion_status(user_id=current_user.id, engine_period=engine_period) if config.enabled else (
+        store.signal_expansion_status(user_id=current_user.id) if period == "today" else {"pipeline_run_id": None, "has_more": False}
+    )
+    first_state = (
+        _first_briefing_state(store, current_user.id, config, engine_period, len(signals))
+        if config.enabled else None
+    )
+    return {
+        "success": True, "period": period, "signals": signals, "display_limit": display_limit,
+        "first_briefing_state": first_state,
+        **expansion,
+    }
 
 
 @router.get("/signals/today")
@@ -107,6 +164,23 @@ def update_recommendation_preference(
 ):
     try:
         result = FeedbackService(store).set_recommendation_preference(signal_id, request.preference, user_id=current_user.id)
+        return {"success": True, "data": result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.put("/signals/{signal_id}/recommendation-reason")
+def update_recommendation_reason(
+    signal_id: int,
+    request: RecommendationReasonUpdate,
+    store: SQLiteStore = Depends(get_store),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Attach an optional, structured reason to a current card preference."""
+    try:
+        result = FeedbackService(store).set_recommendation_reason(
+            signal_id, request.preference, request.reason_code, user_id=current_user.id
+        )
         return {"success": True, "data": result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

@@ -16,6 +16,8 @@ os.environ["LUMOS_BLOCK_EXTERNAL_CALLS"] = "true"
 
 from src.engine.models import Job, JobStatus, JobType
 from src.engine.queue.sqlite_store import SQLiteQueueStore
+from src.engine.queue.worker import JobDeferred, WorkerPool, register_handler
+from src.engine.config import EngineConfig
 
 
 class TestSQLiteQueueStore(unittest.TestCase):
@@ -55,6 +57,21 @@ class TestSQLiteQueueStore(unittest.TestCase):
 
     def test_claim_empty_queue(self):
         self.assertIsNone(self.store.claim("w1"))
+
+    def test_deferred_job_is_not_claimed_before_dependency_is_ready(self):
+        job = self.store.enqueue(Job(job_type="dependency-test", dedupe_key="wait"))
+        claimed = self.store.claim("w1")
+        self.store.defer(claimed.id, 60, "waiting_for_collection_dependencies")
+        self.assertIsNone(self.store.claim("w2"))
+        self.assertEqual(self.store.get_job(job.id).status, JobStatus.PENDING)
+
+    def test_worker_deferral_does_not_consume_retry_budget(self):
+        register_handler("defer-test", lambda _payload, _config: (_ for _ in ()).throw(JobDeferred(60)))
+        job = self.store.enqueue(Job(job_type="defer-test", dedupe_key="wait-worker", max_retries=0))
+        self.assertTrue(WorkerPool(self.store, EngineConfig(enabled=True)).process_one())
+        deferred = self.store.get_job(job.id)
+        self.assertEqual(deferred.status, JobStatus.PENDING)
+        self.assertEqual(deferred.retry_count, 0)
 
     def test_claim_only_one_worker_gets_job(self):
         """Concurrent claims should not give the same job to two workers."""
@@ -136,6 +153,16 @@ class TestSQLiteQueueStore(unittest.TestCase):
         self.assertEqual(len(pending), 2)
         collect_jobs = self.store.list_jobs(job_type="collect")
         self.assertEqual(len(collect_jobs), 1)
+
+    def test_source_observation_records_a_normal_empty_result_without_content(self):
+        self.store.record_source_collection_observation(
+            "hashed-pilot-company", "opendart", "normal_empty",
+            candidate_count=0, request_count=1, provider_code="013",
+        )
+        observation = self.store.get_source_collection_observation("hashed-pilot-company", "opendart")
+        self.assertEqual(observation["outcome"], "normal_empty")
+        self.assertEqual(observation["candidate_count"], 0)
+        self.assertEqual(observation["provider_code"], "013")
 
     def test_no_duplicate_across_50_users(self):
         """50 users requesting same interest should produce 1 job."""

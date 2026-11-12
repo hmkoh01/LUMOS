@@ -88,7 +88,11 @@ def add_interest(
 ):
     if not request.keyword.strip():
         raise HTTPException(status_code=422, detail="키워드를 입력해주세요.")
-    return {"success": True, "interest": store.add_manual_interest(request.keyword, user_id=current_user.id)}
+    interest = store.add_manual_interest(request.keyword, user_id=current_user.id)
+    from src.engine.operations import get_engine_operations
+    runtime = get_engine_operations()
+    queued = runtime.request_user_backfill(current_user.id, "interest") if runtime is not None else 0
+    return {"success": True, "interest": interest, "queued_collection_jobs": queued}
 
 
 @router.get("/context/items")
@@ -118,16 +122,61 @@ def get_interests(
     store: SQLiteStore = Depends(get_store),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    return {
-        "success": True,
-        "interests": store.get_interests(
-            status=status,
-            limit=max(1, min(limit, 500)),
-            include_muted=include_muted,
-            include_deleted=False,
-            user_id=current_user.id,
-        ),
-    }
+    interests = store.get_interests(
+        status=status, limit=max(1, min(limit, 500)), include_muted=include_muted,
+        include_deleted=False, user_id=current_user.id,
+    )
+    from src.engine.collection.source_support import collection_support
+    from src.engine.config import EngineConfig
+    from src.sources.interest_clarification import clarification_for_interest
+    from src.sources.information_types import labels_for_type_ids, options_for_categories, options_for_type_ids
+    from src.sources.router import SourceRouter
+    source_configs = store.get_source_configs(user_id=current_user.id)
+    profile = store.get_profile(user_id=current_user.id) or {}
+    raw_onboarding = profile.get("raw_onboarding_json") or profile.get("raw_onboarding") or {}
+    type_preferences = raw_onboarding.get("interest_type_preferences") or {}
+    router = SourceRouter()
+
+    def selected_type_ids(keyword: object):
+        normalized = " ".join(str(keyword or "").casefold().split())
+        for stored_keyword, values in type_preferences.items():
+            if " ".join(str(stored_keyword or "").casefold().split()) == normalized:
+                return values if isinstance(values, list) else []
+        return []
+
+    for interest in interests:
+        # The UI uses this metadata only to decide whether to show the
+        # optional editor. It does not imply that a source is operational.
+        clarification = clarification_for_interest(interest.get("keyword", ""))
+        interest["clarification"] = clarification or {"needed": False, "options": []}
+        support = collection_support(
+            interest.get("keyword", ""), EngineConfig.from_env().collection.pilot_sources, source_configs, profile=profile,
+        )
+        interest["collection_support"] = support
+        selected = selected_type_ids(interest.get("keyword", ""))
+        interest["information_type_labels"] = labels_for_type_ids(selected)
+        # The editor only exposes choices already defined by the existing
+        # information-type taxonomy.  This is presentation metadata; it does
+        # not change the selected types, routing, or source permissions.
+        if clarification:
+            options = clarification.get("options", [])
+        else:
+            # Type editing is a reader preference, not an operational-source
+            # claim.  Source Support may deliberately be empty while the
+            # Router still knows valid existing taxonomy choices for a topic.
+            categories = router.classify_interests(profile, [{
+                "keyword": interest.get("keyword", ""),
+                "status": interest.get("status", "active"),
+            }])
+            options = options_for_categories(categories) or options_for_categories(support.get("categories", []))
+            option_ids = {item.get("id") for item in options}
+            # A broad Router bucket must not replace an existing, more precise
+            # reader choice with unrelated sibling choices.  Preserve only the
+            # already configured type until the taxonomy offers a matching set.
+            if selected and not set(selected).issubset(option_ids):
+                options = options_for_type_ids(selected)
+        interest["information_type_options"] = options
+    return {"success": True, "interests": interests}
 
 
 @router.get("/interests/recommendations")

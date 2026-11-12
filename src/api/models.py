@@ -21,10 +21,32 @@ class OnboardingRequest(BaseModel):
     role_detail: str = ""
     goals: List[str] = Field(default_factory=list)
     interest_types: List[str] = Field(default_factory=list)
+    interest_type_preferences: Dict[str, List[str]] = Field(default_factory=dict)
+    source_hints: List[str] = Field(default_factory=list)
     keywords: List[str] = Field(default_factory=list)
     preferred_signal_count: Optional[int] = Field(default=None, ge=1)
     briefing_time: Optional[str] = None
     connectors: Dict[str, bool] = Field(default_factory=dict)
+
+
+class OnboardingPreviewRequest(BaseModel):
+    keywords: List[str] = Field(default_factory=list)
+    interest_type_preferences: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+class InformationTypePreferencesUpdate(BaseModel):
+    """Optional, per-interest reader choices used by the existing router."""
+
+    interest_type_preferences: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+class FeedbackLearningSettingsUpdate(BaseModel):
+    enabled: bool
+
+
+class FeedbackLearningRuleReset(BaseModel):
+    feature: str = Field(min_length=1, max_length=64)
+    value: str = Field(min_length=1, max_length=128)
 
 
 class ConnectorUpdate(BaseModel):
@@ -43,3 +65,8 @@ class SavedSignalUpdate(BaseModel):
 
 class RecommendationPreferenceUpdate(BaseModel):
     preference: Optional[Literal["tracked", "ignored"]] = None
+
+
+class RecommendationReasonUpdate(BaseModel):
+    preference: Literal["tracked", "ignored"]
+    reason_code: str = Field(min_length=1, max_length=64)

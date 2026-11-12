@@ -49,8 +49,13 @@ assert.doesNotMatch(html, /관련 소스/);
 assert.match(html, /AI에게 질문/);
 assert.doesNotMatch(html, /자세히 보기/);
 assert.match(html, /data-toggle-saved/);
+assert.match(html, /class="button primary" data-open-url=/);
+assert.match(html, /class="button secondary" data-ask-assistant=/);
+assert.match(html, /추천 조절/);
 assert.match(html, /https:\/\/youtu.be\/test/);
 assert.doesNotMatch(html, /추가 신호 보기/);
+vm.runInContext(`globalThis.noSourceCard = renderSignalCard({id: 7, title: 'Untitled source', content_timestamp: 'invalid'}, 1);`, context);
+assert.doesNotMatch(vm.runInContext('noSourceCard', context), /출처 미확인|수집 시점 미확인/);
 vm.runInContext(`
   state.signals = [{id: 10, rank: 9, title: 'Newest'}, {id: 11, rank: 2, title: 'Older'}];
   state.hasMoreSignals = false;

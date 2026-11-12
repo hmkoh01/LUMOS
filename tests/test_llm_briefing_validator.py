@@ -127,7 +127,7 @@ def test_personalization_accepts_contextual_non_guarantee():
         "user_relevance_ko": "LangGraph 워크플로의 중단·재개 경로를 설계할 때 검토할 수 있는 변경입니다.",
         "recommendation_reason_ko": (
             "LangGraph 워크플로에서 인터럽트 답변을 식별하거나 재개 경로를 검토한다면, "
-            "태스크별 ID와 strict resume mode 변경을 확인할 만합니다. "
+            "태스크별 ID와 strict resume mode 변경의 범위를 원문에서 확인할 수 있습니다. "
             "원문은 이 변경의 안정성 결과를 언급하지 않습니다."
         ),
         "why_it_matters_ko": "중단된 작업을 다루는 흐름의 변경점을 검토하는 데 참고할 수 있습니다.",
@@ -173,7 +173,7 @@ def test_pando_topic_reason_uses_source_anchor_and_does_not_claim_adoption():
             return ({
                 "source_facts_ko": "Pando is OpenAI's Git-compatible backend.",
                 "user_relevance_ko": "Direct relevance to this profile is not confirmed.",
-                "recommendation_reason_ko": "Pando shows an internal Git backend built around Codex-scale concurrent work; compare its source-control tradeoffs with your development infrastructure interests.",
+                "recommendation_reason_ko": "AI coding agents 관심사에서 Pando가 설명한 Git-compatible backend와 동시 작업 구조를 소스 관리 방식을 설계할 때 비교할 수 있습니다.",
                 "why_it_matters_ko": "It is an internal case study, not a public product release.",
                 "recommended_action_ko": "Review the article's Git compatibility and monorepo design choices.",
                 "relevance_confidence": "medium",

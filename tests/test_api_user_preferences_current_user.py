@@ -53,6 +53,14 @@ class ApiUserPreferencesCurrentUserTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_onboarding_status_is_scoped_to_the_current_user(self):
+        self.assertFalse(self.client.get("/api/v1/onboarding/status").json()["completed"])
+        self.onboarding("Researcher", "AI safety", 5)
+        self.assertTrue(self.client.get("/api/v1/onboarding/status").json()["completed"])
+
+        self.selected_user = self.user_b
+        self.assertFalse(self.client.get("/api/v1/onboarding/status").json()["completed"])
+
     def test_profile_settings_interests_and_source_configs_follow_current_user(self):
         self.onboarding("A role", "shared-topic", 2)
         self.selected_user = self.user_b

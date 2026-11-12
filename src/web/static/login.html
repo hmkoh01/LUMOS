@@ -127,7 +127,7 @@
         // Already logged in — go to app
         const session = await authClient.getSession();
         if (session) {
-          window.location.replace("/");
+          window.location.replace("/onboarding");
           return;
         }
 
@@ -163,7 +163,7 @@
           googleBtn.textContent = "Google로 이동 중…";
           const { error } = await supabase.auth.signInWithOAuth({
             provider: "google",
-            options: { redirectTo: appBaseUrl + "/" },
+            options: { redirectTo: appBaseUrl + "/onboarding" },
           });
           if (error) {
             googleBtn.disabled = false;
@@ -184,7 +184,7 @@
 
           const { error } = await supabase.auth.signInWithOtp({
             email,
-            options: { emailRedirectTo: appBaseUrl + "/" },
+            options: { emailRedirectTo: appBaseUrl + "/onboarding" },
           });
 
           if (error) {

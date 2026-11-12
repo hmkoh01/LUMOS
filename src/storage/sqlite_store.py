@@ -1,5 +1,6 @@
 import json
 import hashlib
+import os
 import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
@@ -15,6 +16,11 @@ DEFAULT_LOCAL_USER_ID = 1
 # keeps calendar filtering available in Windows portable builds without an
 # additional IANA time-zone database dependency.
 KOREA_TIMEZONE = timezone(timedelta(hours=9), name="Asia/Seoul")
+
+
+def _uses_local_auth() -> bool:
+    """Whether this store is serving the no-auth local development mode."""
+    return os.environ.get("LUMOS_AUTH_MODE", "local").strip().lower() == "local"
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -61,7 +67,10 @@ class SQLiteStore:
 
     def _migrate_legacy_user_ownership(self, conn: sqlite3.Connection):
         """Rebuild legacy singleton/config tables with per-user constraints."""
-        conn.execute("INSERT OR IGNORE INTO users (id, external_id, display_name) VALUES (1, 'local-default', 'Local user')")
+        # The singleton record belongs only to no-auth local development.  In
+        # Supabase mode each row must originate from a verified first login.
+        if _uses_local_auth():
+            conn.execute("INSERT OR IGNORE INTO users (id, external_id, display_name) VALUES (1, 'local-default', 'Local user')")
         specs = {
             "user_settings": (
                 "CREATE TABLE user_settings_new (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL DEFAULT 1 UNIQUE, signal_count INTEGER NOT NULL DEFAULT 3, briefing_time TEXT NOT NULL DEFAULT '08:00', timezone TEXT NOT NULL DEFAULT 'Asia/Seoul', enabled_sources_json TEXT NOT NULL, enabled_connectors_json TEXT NOT NULL, desktop_push_enabled INTEGER NOT NULL DEFAULT 1, generate_mode TEXT NOT NULL DEFAULT 'mock', sync_before_briefing INTEGER NOT NULL DEFAULT 1, auto_expand_interests INTEGER NOT NULL DEFAULT 0, context_sync_interval_minutes INTEGER NOT NULL DEFAULT 360, max_interest_keywords INTEGER NOT NULL DEFAULT 50, mode_enabled INTEGER NOT NULL DEFAULT 1, onboarding_completed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -164,6 +173,8 @@ class SQLiteStore:
         )
 
     def _ensure_defaults(self, conn: sqlite3.Connection):
+        if not _uses_local_auth():
+            return
         conn.execute(
             """
             INSERT OR IGNORE INTO user_settings
@@ -321,6 +332,24 @@ class SQLiteStore:
                 f"User lookup failed for external_id={external_id!r} after insert"
             )
         return int(row[0])
+
+    def touch_user_activity(self, user_id: int = DEFAULT_LOCAL_USER_ID) -> None:
+        """Record a minimal visit marker used to scope cooperative collection."""
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO user_activity (user_id, last_seen_at) VALUES (?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(user_id) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP""",
+                (user_id,),
+            )
+            conn.commit()
+
+    def get_active_user_ids(self, window_days: int) -> List[int]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT user_id FROM user_activity WHERE last_seen_at >= datetime('now', ?)",
+                (f"-{max(1, int(window_days))} days",),
+            ).fetchall()
+            return [int(row["user_id"]) for row in rows]
 
     def get_user_by_external_id(self, external_id: str) -> Optional[Dict[str, Any]]:
         """Return the users row for an external_id, or None if not found."""
@@ -1053,6 +1082,21 @@ class SQLiteStore:
                 )
             conn.commit()
 
+    def skip_pipeline_run(self, run_id: int, summary: Dict[str, Any], user_id: int = DEFAULT_LOCAL_USER_ID):
+        """Record a deliberately unexecuted run without calling it completed."""
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE pipeline_runs
+                SET status = 'skipped',
+                    completed_at = CURRENT_TIMESTAMP,
+                    summary_json = ?
+                WHERE id = ? AND user_id = ? AND status = 'running'
+                """,
+                (self.dumps(summary), run_id, user_id),
+            )
+            conn.commit()
+
     def fail_pipeline_run(self, run_id: int, error_message: str, user_id: int = DEFAULT_LOCAL_USER_ID):
         with self.connect() as conn:
             conn.execute(
@@ -1218,14 +1262,18 @@ class SQLiteStore:
                  for rank, candidate in enumerate(candidates, start=base_count + 1)],
             )
 
-    def signal_expansion_status(self, user_id: int = DEFAULT_LOCAL_USER_ID):
+    def signal_expansion_status(self, user_id: int = DEFAULT_LOCAL_USER_ID, engine_period: Optional[str] = None):
         with self.connect() as conn:
-            return self._expansion_status(conn, user_id)
+            return self._expansion_status(conn, user_id, engine_period=engine_period)
 
-    def _expansion_status(self, conn, user_id: int = DEFAULT_LOCAL_USER_ID):
+    def _expansion_status(self, conn, user_id: int = DEFAULT_LOCAL_USER_ID, engine_period: Optional[str] = None):
+        where = "user_id = ? AND signal_date = ? AND status != 'archived'"
+        params: List[Any] = [user_id, date.today().isoformat()]
+        if engine_period:
+            where += " AND json_extract(metadata_json, '$.briefing_provider') = 'engine-v2-structured' AND json_extract(metadata_json, '$.engine_period') = ?"
+            params.append(engine_period)
         row = conn.execute(
-            "SELECT MAX(pipeline_run_id) AS run_id FROM signals WHERE user_id = ? AND signal_date = ? AND status != 'archived'",
-            (user_id, date.today().isoformat()),
+            f"SELECT MAX(pipeline_run_id) AS run_id FROM signals WHERE {where}", params,
         ).fetchone()
         run_id = row["run_id"]
         remaining = conn.execute(
@@ -1243,16 +1291,18 @@ class SQLiteStore:
             ).fetchall()
         return [(row["rank"], self.loads(row["candidate_json"], {})) for row in rows]
 
-    def reveal_signals(self, run_id, prepared, user_id: int = DEFAULT_LOCAL_USER_ID):
+    def reveal_signals(self, run_id, prepared, user_id: int = DEFAULT_LOCAL_USER_ID, engine_period: Optional[str] = None):
         from src.signals.identity import article_key
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if not self._pipeline_run_owned(conn, run_id, user_id) or self._expansion_status(conn, user_id)["pipeline_run_id"] != run_id:
+            if not self._pipeline_run_owned(conn, run_id, user_id) or self._expansion_status(conn, user_id, engine_period=engine_period)["pipeline_run_id"] != run_id:
                 raise ValueError("브리핑이 바뀌었어요. 새로고침 후 다시 시도해주세요.")
-            shown = conn.execute(
-                "SELECT id, source_url FROM signals WHERE user_id = ? AND signal_date = ? AND status != 'archived'",
-                (user_id, date.today().isoformat()),
-            ).fetchall()
+            where = "user_id = ? AND signal_date = ? AND status != 'archived'"
+            params: List[Any] = [user_id, date.today().isoformat()]
+            if engine_period:
+                where += " AND json_extract(metadata_json, '$.briefing_provider') = 'engine-v2-structured' AND json_extract(metadata_json, '$.engine_period') = ?"
+                params.append(engine_period)
+            shown = conn.execute(f"SELECT id, source_url FROM signals WHERE {where}", params).fetchall()
             identities = {article_key(dict(row)): row["id"] for row in shown}
             for rank, signal in prepared:
                 reserve = conn.execute(
@@ -1372,6 +1422,15 @@ class SQLiteStore:
             rows = conn.execute(
                 "SELECT * FROM source_items ORDER BY collected_at DESC LIMIT ?",
                 (limit,),
+            ).fetchall()
+            return [self._source_item_from_row(row) for row in rows]
+
+    def get_source_items_since(self, since_iso: str, limit: int = 300) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM source_items WHERE COALESCE(published_at, collected_at) >= ? "
+                "ORDER BY COALESCE(published_at, collected_at) DESC LIMIT ?",
+                (since_iso, limit),
             ).fetchall()
             return [self._source_item_from_row(row) for row in rows]
 
@@ -1623,15 +1682,195 @@ class SQLiteStore:
             conn.commit()
             return {"saved": bool(row["saved"]) if row else False, "recommendation_preference": preference, "previous_preference": previous, "changed": True}
 
+    def set_feedback_preference_detail(
+        self,
+        signal_id: int,
+        preference: str,
+        reason_code: str,
+        detail: Dict[str, Any],
+        user_id: int = DEFAULT_LOCAL_USER_ID,
+    ) -> Dict[str, Any]:
+        """Store the current structured reason, never card text or source body."""
+        if preference not in {"tracked", "ignored"}:
+            raise ValueError("Unsupported recommendation preference")
+        with self.connect() as conn:
+            state = conn.execute(
+                "SELECT recommendation_preference FROM signal_preferences WHERE user_id = ? AND signal_id = ?",
+                (user_id, signal_id),
+            ).fetchone()
+            if not state:
+                raise ValueError("Recommendation preference not found for this user")
+            if state["recommendation_preference"] != preference:
+                raise ValueError("Feedback reason must match the current recommendation preference")
+            previous = conn.execute(
+                "SELECT preference, reason_code FROM feedback_preference_details WHERE user_id = ? AND signal_id = ?",
+                (user_id, signal_id),
+            ).fetchone()
+            changed = not previous or previous["preference"] != preference or previous["reason_code"] != reason_code
+            conn.execute(
+                """
+                INSERT INTO feedback_preference_details
+                (user_id, signal_id, preference, reason_code, related_interests_json,
+                 information_type_ids_json, topic_tags_json, difficulty, content_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, signal_id) DO UPDATE SET
+                  preference = excluded.preference,
+                  reason_code = excluded.reason_code,
+                  related_interests_json = excluded.related_interests_json,
+                  information_type_ids_json = excluded.information_type_ids_json,
+                  topic_tags_json = excluded.topic_tags_json,
+                  difficulty = excluded.difficulty,
+                  content_type = excluded.content_type,
+                  updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    user_id, signal_id, preference, reason_code,
+                    self.dumps(detail.get("related_interests", [])),
+                    self.dumps(detail.get("information_type_ids", [])),
+                    self.dumps(detail.get("topic_tags", [])),
+                    str(detail.get("difficulty") or "unknown"),
+                    str(detail.get("content_type") or "unknown"),
+                ),
+            )
+            conn.commit()
+        return {"changed": changed, "detail": self.get_feedback_preference_detail(signal_id, user_id=user_id)}
+
+    def clear_feedback_preference_detail(self, signal_id: int, user_id: int = DEFAULT_LOCAL_USER_ID) -> bool:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM feedback_preference_details WHERE user_id = ? AND signal_id = ?",
+                (user_id, signal_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_feedback_preference_detail(self, signal_id: int, user_id: int = DEFAULT_LOCAL_USER_ID) -> Optional[Dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM feedback_preference_details WHERE user_id = ? AND signal_id = ?",
+                (user_id, signal_id),
+            ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        for key in ("related_interests_json", "information_type_ids_json", "topic_tags_json"):
+            item[key] = self.loads(item[key], [])
+        return item
+
+    def get_feedback_preference_details(
+        self, user_id: int = DEFAULT_LOCAL_USER_ID, limit: int = 500
+    ) -> List[Dict[str, Any]]:
+        """Structured, current feedback only; never joins card title/body."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT d.user_id, d.signal_id, d.preference, d.reason_code,
+                       d.related_interests_json, d.information_type_ids_json,
+                       d.topic_tags_json, d.difficulty, d.content_type, d.evaluated_at, d.updated_at,
+                       s.pipeline_run_id
+                FROM feedback_preference_details d
+                LEFT JOIN signals s ON s.id = d.signal_id AND s.user_id = d.user_id
+                WHERE d.user_id = ?
+                ORDER BY d.updated_at DESC
+                LIMIT ?
+                """,
+                (user_id, max(1, min(int(limit), 1000))),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            for key in ("related_interests_json", "information_type_ids_json", "topic_tags_json"):
+                item[key] = self.loads(item[key], [])
+            result.append(item)
+        return result
+
+    def get_feedback_learning_settings(self, user_id: int = DEFAULT_LOCAL_USER_ID) -> Dict[str, Any]:
+        """Reader controls only; this never opts a user into a live ranker."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT enabled, reset_at, updated_at FROM feedback_learning_settings WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        if not row:
+            return {"enabled": True, "reset_at": None, "updated_at": None}
+        return {"enabled": bool(row["enabled"]), "reset_at": row["reset_at"], "updated_at": row["updated_at"]}
+
+    def set_feedback_learning_enabled(self, enabled: bool, user_id: int = DEFAULT_LOCAL_USER_ID) -> Dict[str, Any]:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO feedback_learning_settings (user_id, enabled) VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled, updated_at = CURRENT_TIMESTAMP""",
+                (user_id, int(bool(enabled))),
+            )
+            conn.commit()
+        return self.get_feedback_learning_settings(user_id=user_id)
+
+    def reset_feedback_learning(
+        self, *, user_id: int = DEFAULT_LOCAL_USER_ID, feature: Optional[str] = None, value: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Forget inferred effects without deleting feedback, cards, or interests."""
+        feature, value = str(feature or "").strip().casefold(), str(value or "").strip().casefold()
+        with self.connect() as conn:
+            if feature and value:
+                conn.execute(
+                    """INSERT INTO feedback_learning_rule_resets (user_id, feature, value) VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, feature, value) DO UPDATE SET reset_at = CURRENT_TIMESTAMP""",
+                    (user_id, feature, value),
+                )
+                scope = "rule"
+            elif not feature and not value:
+                conn.execute(
+                    """INSERT INTO feedback_learning_settings (user_id, reset_at) VALUES (?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_id) DO UPDATE SET reset_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP""",
+                    (user_id,),
+                )
+                scope = "all"
+            else:
+                raise ValueError("feature and value must be provided together")
+            conn.commit()
+        return {"scope": scope, "settings": self.get_feedback_learning_settings(user_id=user_id)}
+
+    def get_feedback_learning_rule_resets(self, user_id: int = DEFAULT_LOCAL_USER_ID) -> List[Dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT feature, value, reset_at FROM feedback_learning_rule_resets WHERE user_id = ?", (user_id,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_inferred_preference_summary(
+        self, user_id: int = DEFAULT_LOCAL_USER_ID, min_consistent_events: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Offline-only aggregate for a future ranker; it changes no ranking."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT preference, reason_code, content_type, difficulty, COUNT(*) AS event_count,
+                       MAX(updated_at) AS last_evaluated_at
+                FROM feedback_preference_details
+                WHERE user_id = ?
+                GROUP BY preference, reason_code, content_type, difficulty
+                ORDER BY event_count DESC, last_evaluated_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "eligible_for_future_ranking": int(row["event_count"]) >= max(2, int(min_consistent_events)),
+            }
+            for row in rows
+        ]
+
     def get_feedback_signals(self, event_type: str, limit: int = 100, user_id: int = DEFAULT_LOCAL_USER_ID) -> List[Dict[str, Any]]:
         if event_type not in {"ignored", "tracked"}:
             return []
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT s.*, p.preference_updated_at AS feedback_at
+                SELECT s.*, p.preference_updated_at AS feedback_at, d.reason_code AS feedback_reason_code
                 FROM signal_preferences p
                 JOIN signals s ON s.id = p.signal_id AND s.user_id = p.user_id
+                LEFT JOIN feedback_preference_details d
+                  ON d.signal_id = p.signal_id AND d.user_id = p.user_id
                 WHERE p.recommendation_preference = ? AND p.user_id = ?
                 ORDER BY p.preference_updated_at DESC, s.created_at DESC
                 LIMIT ?
@@ -1737,6 +1976,204 @@ class SQLiteStore:
             )
         )
         return self._dedupe_signal_articles_from_signals(candidates)
+
+    def get_engine_signals_for_period(
+        self,
+        period: str,
+        *,
+        limit: int,
+        user_id: int = DEFAULT_LOCAL_USER_ID,
+    ) -> List[Dict[str, Any]]:
+        """Return Engine v2 cards for their independently evaluated tab only.
+
+        Source timestamps are evidence used during scoring.  They must not move
+        a weekly or monthly Engine result into a different presentation tab.
+        Legacy/mock rows are intentionally excluded from this v2 query.
+        """
+        engine_period = {"today": "daily", "week": "weekly", "month": "monthly"}.get(period)
+        if engine_period is None:
+            raise ValueError(f"Unsupported briefing period: {period}")
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM signals
+                WHERE user_id = ? AND status != 'archived'
+                  AND json_extract(metadata_json, '$.briefing_provider') = 'engine-v2-structured'
+                  AND json_extract(metadata_json, '$.engine_period') = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM signal_preferences p
+                      WHERE p.signal_id = signals.id AND p.user_id = signals.user_id
+                        AND p.recommendation_preference = 'ignored'
+                  )
+                ORDER BY rank ASC, created_at DESC, id DESC
+                """,
+                (user_id, engine_period),
+            ).fetchall()
+        return self._dedupe_signal_articles(rows)[:max(1, int(limit))]
+
+    def get_engine_preference_keys(
+        self,
+        engine_period: str,
+        preference: str,
+        user_id: int = DEFAULT_LOCAL_USER_ID,
+        *,
+        across_periods: bool = False,
+    ) -> List[str]:
+        """Return raw source dedupe keys with a durable per-card preference.
+
+        ``across_periods`` is deliberately used only for an explicit negative
+        recommendation.  An ignored source item must not reappear as the same
+        story in daily, weekly, or monthly cards; tracked preferences remain
+        scoped to the period that earned them.
+        """
+        with self.connect() as conn:
+            if across_periods:
+                rows = conn.execute(
+                    """SELECT s.dedupe_key FROM signals s
+                       JOIN signal_preferences p ON p.signal_id = s.id AND p.user_id = s.user_id
+                       WHERE s.user_id = ? AND p.recommendation_preference = ?
+                         AND json_extract(s.metadata_json, '$.briefing_provider') = 'engine-v2-structured'""",
+                    (user_id, preference),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT s.dedupe_key FROM signals s
+                       JOIN signal_preferences p ON p.signal_id = s.id AND p.user_id = s.user_id
+                       WHERE s.user_id = ? AND p.recommendation_preference = ?
+                         AND json_extract(s.metadata_json, '$.briefing_provider') = 'engine-v2-structured'
+                         AND json_extract(s.metadata_json, '$.engine_period') = ?""",
+                    (user_id, preference, engine_period),
+                ).fetchall()
+        values: List[str] = []
+        for row in rows:
+            key = str(row["dedupe_key"] or "")
+            # Published Engine keys are engine-v2:<period>:<raw-item-key>.
+            # Reject unknown shapes rather than accidentally suppressing an
+            # unrelated legacy signal.
+            prefix = "engine-v2:"
+            if not key.startswith(prefix):
+                continue
+            parts = key.split(":", 2)
+            if len(parts) == 3 and parts[1] in {"daily", "weekly", "monthly"} and parts[2]:
+                values.append(parts[2])
+        return values
+
+    def reconcile_engine_period_cards(
+        self, signals: List[Dict[str, Any]], *, user_id: int, period: str, pipeline_run_id: int,
+        preserve_existing_on_incomplete: bool = False,
+        expected_card_policy_versions: Optional[Dict[str, str]] = None,
+        display_limit: Optional[int] = None,
+    ) -> Dict[str, int]:
+        """Atomically make one Engine period's active cards match a new ranking.
+
+        Old cards are archived rather than deleted, so saved/ignored/tracked
+        preferences and the saved feed remain intact.  Existing selected cards
+        retain their row IDs and therefore their preferences.
+        """
+        selected = {signal["dedupe_key"]: signal for signal in signals}
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing_rows = conn.execute(
+                """SELECT id, dedupe_key, status, rank, metadata_json, source_items_json, created_at FROM signals WHERE user_id = ?
+                   AND json_extract(metadata_json, '$.briefing_provider') = 'engine-v2-structured'
+                   AND json_extract(metadata_json, '$.engine_period') = ?""",
+                (user_id, period),
+            ).fetchall()
+            existing = {row["dedupe_key"]: row["id"] for row in existing_rows}
+            selected_ids = []
+            created = 0
+            retained = 0
+            preserved = 0
+            for key, signal in selected.items():
+                signal_id = existing.get(key)
+                if signal_id is None:
+                    signal_id = self._insert_signal(conn, signal, pipeline_run_id, user_id)
+                    created += 1
+                else:
+                    conn.execute(
+                        """UPDATE signals SET pipeline_run_id = ?, signal_date = ?, title = ?, summary = ?,
+                           why_it_matters = ?, category = ?, recommended_action = ?, source_name = ?,
+                           source_url = ?, source_items_json = ?, metadata_json = ?, confidence = ?, rank = ?,
+                           status = 'active', archived_reason = NULL
+                           WHERE id = ? AND user_id = ?""",
+                        (pipeline_run_id, signal.get("signal_date") or date.today().isoformat(), signal["title"],
+                         signal["summary"], signal["why_it_matters"], signal.get("category", ""),
+                         signal.get("recommended_action", ""), signal.get("source_name", "Mock Source"),
+                         signal.get("source_url", ""), self.dumps(signal.get("source_items_json", [])),
+                         self.dumps(signal.get("metadata_json", {})), float(signal.get("confidence", 0.0)),
+                         int(signal.get("rank", 1)), signal_id, user_id),
+                    )
+                    retained += 1
+                selected_ids.append(signal_id)
+
+            # A provider/network failure is not a new, authoritative ranking.
+            # Keep only current-policy cards whose source date still belongs to
+            # this tab, never legacy/vague cards and never ignored cards.
+            preserved_ids: List[int] = []
+            if preserve_existing_on_incomplete and expected_card_policy_versions:
+                preference_rows = conn.execute(
+                    """SELECT signal_id FROM signal_preferences
+                       WHERE user_id = ? AND recommendation_preference = 'ignored'""",
+                    (user_id,),
+                ).fetchall()
+                ignored_ids = {int(row["signal_id"]) for row in preference_rows}
+                capacity = max(0, int(display_limit or len(selected_ids)) - len(selected_ids))
+                for row in sorted(existing_rows, key=lambda value: (int(value["rank"] or 0), int(value["id"]))):
+                    if len(preserved_ids) >= capacity or row["id"] in selected_ids or row["id"] in ignored_ids:
+                        continue
+                    if not self._is_current_policy_engine_signal(row, period, expected_card_policy_versions):
+                        continue
+                    preserved_ids.append(int(row["id"]))
+                    conn.execute(
+                        "UPDATE signals SET status = 'active', archived_reason = NULL, rank = ? WHERE id = ? AND user_id = ?",
+                        (len(selected_ids) + len(preserved_ids), row["id"], user_id),
+                    )
+                preserved = len(preserved_ids)
+            retained_ids = [*selected_ids, *preserved_ids]
+            if retained_ids:
+                placeholders = ",".join("?" for _ in retained_ids)
+                conn.execute(
+                    f"""UPDATE signals SET status = 'archived', archived_reason = 'superseded_engine_ranking'
+                        WHERE user_id = ?
+                          AND json_extract(metadata_json, '$.briefing_provider') = 'engine-v2-structured'
+                          AND json_extract(metadata_json, '$.engine_period') = ?
+                          AND id NOT IN ({placeholders}) AND status != 'archived'""",
+                    [user_id, period, *retained_ids],
+                )
+            else:
+                conn.execute(
+                    """UPDATE signals SET status = 'archived', archived_reason = 'superseded_engine_ranking'
+                       WHERE user_id = ? AND json_extract(metadata_json, '$.briefing_provider') = 'engine-v2-structured'
+                         AND json_extract(metadata_json, '$.engine_period') = ? AND status != 'archived'""",
+                    (user_id, period),
+                )
+            archived = conn.execute("SELECT changes()").fetchone()[0]
+            conn.commit()
+        return {"created": created, "retained": retained, "preserved": preserved, "archived": archived}
+
+    def _is_current_policy_engine_signal(
+        self, row: sqlite3.Row, period: str, expected_card_policy_versions: Dict[str, str],
+    ) -> bool:
+        """Whether a prior card is safe to retain after an incomplete run."""
+        if row["status"] == "archived":
+            return False
+        metadata = self.loads(row["metadata_json"], {})
+        if metadata.get("card_policy_versions") != expected_card_policy_versions:
+            return False
+        source_items = self.loads(row["source_items_json"], [])
+        published_at = next(
+            (item.get("published_at") for item in source_items if isinstance(item, dict) and item.get("published_at")),
+            None,
+        )
+        published = self._parse_utc_timestamp(published_at)
+        if published is None:
+            return False
+        now_kst = datetime.now(timezone.utc).astimezone(KOREA_TIMEZONE)
+        period_name = {"daily": "today", "weekly": "week", "monthly": "month"}.get(period)
+        if period_name is None:
+            return False
+        week_start = now_kst.date() - timedelta(days=now_kst.weekday())
+        return self._is_in_briefing_period(published, period_name, now_kst.date(), week_start)
 
     @staticmethod
     def _is_in_briefing_period(

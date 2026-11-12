@@ -26,10 +26,12 @@ class JobStatus(str, Enum):
 
 class JobType(str, Enum):
     COLLECT = "collect"
+    PREPARE_BRIEFINGS = "prepare_briefings"
     EVALUATE = "evaluate"
     GENERATE_BRIEFING = "generate_briefing"
     BACKFILL = "backfill"
     INTEREST_RESOLVE = "interest_resolve"
+    SOURCE_DISCOVERY = "source_discovery"
 
 
 class Period(str, Enum):
@@ -65,6 +67,7 @@ class Job:
     created_at: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+    available_at: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
